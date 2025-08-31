@@ -20,7 +20,7 @@ import { BRAND } from "@/brand";
 const toSportKey = (name: string) =>
   name.replace(/\s+/g, "").replace(/-/g, "");
 
-// optional: default placeholder if a coach has no image
+// default placeholder 
 const COACH_PLACEHOLDER = "/images/coach_photo.jpg";
 
 // --- Sports details object 

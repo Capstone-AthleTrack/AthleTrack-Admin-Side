@@ -1,11 +1,17 @@
 import { Card, Form, Input, Button, Typography, Divider } from "antd";
 import { MailOutlined, LockOutlined, UserOutlined } from "@ant-design/icons";
 import { BRAND } from "@/brand";
+interface SignUpFormValues {
+  fullName: string;
+  email: string;
+  password: string;
+  confirm: string;
+}
 
 export default function SignUp() {
   const [form] = Form.useForm();
 
-  const onFinish = (values: any) => {
+  const onFinish = (values: SignUpFormValues) => {
     console.log(values);
   };
 

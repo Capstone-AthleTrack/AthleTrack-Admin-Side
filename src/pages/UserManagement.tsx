@@ -139,6 +139,7 @@ export default function UserManagement() {
   const handleAddSubmit = async () => {
     try {
       const values = await form.validateFields();
+      
       const newUser: RequestItem = {
         id: "u-" + Date.now(),
         kind: "Users",
@@ -154,12 +155,21 @@ export default function UserManagement() {
           sport: values.sport || undefined,
         },
       };
-      setData((prev) => [newUser, ...prev]); // add to top
+      
+      // Add the new user to the data state
+      setData((prev) => [newUser, ...prev]); 
       message.success("User added.");
       closeAdd();
-      setSelectedId(newUser.id); // auto focus on the new entry
-    } catch (e) {
-      // validation errors are handled by antd
+      setSelectedId(newUser.id); 
+    } catch (e: unknown) {
+      // Handle error
+      if (e instanceof Error) {
+        console.error(e.message); 
+        message.error("Failed to add user. Please try again.");
+      } else {
+        console.error("An unexpected error occurred", e);
+        message.error("An unexpected error occurred.");
+      }
     }
   };
 
@@ -293,7 +303,7 @@ export default function UserManagement() {
       {/* ADD USER MODAL */}
       <Modal
         title="Add User"
-        visible={isAddOpen}           // if you're on antd v5, change to: open={isAddOpen}
+        visible={isAddOpen}         
         onOk={handleAddSubmit}
         onCancel={closeAdd}
         okText="Save"

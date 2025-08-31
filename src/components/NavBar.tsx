@@ -10,7 +10,7 @@ export default function NavBar() {
   const { pathname } = useLocation();
   const navigate = useNavigate(); 
 
-  // Handle scroll to add shadow and background
+  // scroll to add shadow and background
   useEffect(() => {
     const handleScroll = () => {
       setScrolled(window.scrollY > 20); 
@@ -20,7 +20,7 @@ export default function NavBar() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
   
-  // Show confirmation modal
+  // logoutconfirmation modal
   const showModal = () => {
     setIsModalVisible(true);
   };

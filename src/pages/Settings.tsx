@@ -1,4 +1,3 @@
-// src/pages/Settings.tsx
 import { useState } from "react";
 import {
   Form,
@@ -28,30 +27,40 @@ export default function Settings() {
   const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
   const navigate = useNavigate();
 
-  // ----- Handlers -----
-  const handleSaveProfile = async (values: any) => {
-    setLoading(true);
-    try {
-      console.log("Profile values:", values);
-      message.success("Profile updated successfully!");
-    } catch {
-      message.error("Failed to update profile.");
-    } finally {
-      setLoading(false);
-    }
-  };
+interface ProfileValues {
+  name: string;
+  email: string;
+}
 
-  const handleSaveSecurity = async (values: any) => {
-    setLoading(true);
-    try {
-      console.log("Security values:", values);
-      message.success("Password changed successfully!");
-    } catch {
-      message.error("Failed to change password.");
-    } finally {
-      setLoading(false);
-    }
-  };
+interface SecurityValues {
+  oldPassword: string;
+  newPassword: string;
+}
+
+// ----- Handlers -----
+const handleSaveProfile = async (values: ProfileValues) => {
+  setLoading(true);
+  try {
+    console.log("Profile values:", values);
+    message.success("Profile updated successfully!");
+  } catch {
+    message.error("Failed to update profile.");
+  } finally {
+    setLoading(false);
+  }
+};
+
+const handleSaveSecurity = async (values: SecurityValues) => {
+  setLoading(true);
+  try {
+    console.log("Security values:", values);
+    message.success("Password changed successfully!");
+  } catch {
+    message.error("Failed to change password.");
+  } finally {
+    setLoading(false);
+  }
+};
 
   // ----- Upload (preview only) -----
   const uploadProps = {
@@ -150,8 +159,6 @@ export default function Settings() {
       </Form>
     </Card>
   );
-
-
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-100 via-gray-200 to-gray-300">

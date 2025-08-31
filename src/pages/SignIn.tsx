@@ -2,12 +2,16 @@ import { Card, Form, Input, Button, Typography, Divider } from "antd";
 import { MailOutlined, LockOutlined } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import { BRAND } from "@/brand";
+interface SignInFormValues {
+  email: string;
+  password: string;
+}
 
 export default function SignIn() {
   const [form] = Form.useForm();
   const navigate = useNavigate();
 
-  const onFinish = (values: any) => {
+  const onFinish = (values: SignInFormValues) => {
     console.log(values);
 
   navigate("/dashboard");

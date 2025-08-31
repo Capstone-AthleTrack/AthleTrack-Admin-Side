@@ -52,7 +52,6 @@ const mockData: RequestItem[] = [
     reason: "Verified by coach",
     extra: { pupId: "PUP-23-007", sport: "Volleyball" },
   },
-  // users can exist in the array; this page filters by kind === "AthleteRequests"
   {
     id: "u-101",
     kind: "Users",

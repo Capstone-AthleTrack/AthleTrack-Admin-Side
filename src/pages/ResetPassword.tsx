@@ -4,11 +4,14 @@ import { BRAND } from "@/brand";
 
 export default function ResetPassword() {
   const [form] = Form.useForm();
+  interface ResetPasswordValues {
+  email: string;
+}
 
-  const onFinish = async (values: any) => {
-    console.log("Reset link for:", values.email);
-    message.success("If that email exists, we’ve sent a reset link.");
-  };
+const onFinish = async (values: ResetPasswordValues) => {
+  console.log("Reset link for:", values.email);
+  message.success("If that email exists, we’ve sent a reset link.");
+};
 
   return (
     <div className="min-h-screen w-screen grid grid-cols-1 lg:grid-cols-[60%_40%] font-sans overflow-hidden">

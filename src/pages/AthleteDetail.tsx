@@ -10,7 +10,11 @@ import sportDetails from "./SportsDetail";
 
 const months = ["JAN","FEB","MAR","APR","MAY","JUNE","JULY","AUG","SEP","OCT","NOV","DEC"];
 
-function csvDownload(filename: string, rows: any[]) {
+interface Row {
+  [key: string]: string | number; 
+}
+
+function csvDownload(filename: string, rows: Row[]) {
   const header = Object.keys(rows[0] ?? {}).join(",");
   const body = rows.map(r => Object.values(r).join(",")).join("\n");
   const blob = new Blob([header + "\n" + body], { type: "text/csv;charset=utf-8;" });
@@ -52,10 +56,8 @@ export default function AthleteDetail() {
   const [showConfirm, setShowConfirm] = useState(false);
   async function handleConfirmDelete() {
   // TODO: call your API to delete the athlete here
-  // await api.deleteAthlete(athleteId)
 
   setShowConfirm(false);
-  // Optionally navigate away or show a toast
   // navigate(`/sports/${encodeURIComponent(sportName)}`);
 }
 
@@ -93,7 +95,7 @@ export default function AthleteDetail() {
           <div className="flex flex-col items-center text-white">
             <div className="w-40 h-40 rounded-full bg-white/20 grid place-items-center mb-6 overflow-hidden">
                 <img
-                    src="/images/coach_photo.jpg" // put your placeholder image in public/images
+                    src="/images/coach_photo.jpg" 
                     alt={athleteName}
                     className="w-full h-full object-cover"
                 />
@@ -160,7 +162,7 @@ export default function AthleteDetail() {
             </button>
             </div>
 
-            {/* ✅ Confirmation modal */}
+            {/* Confirmation modal */}
             {showConfirm && (
             <div className="fixed inset-0 z-50 flex items-center justify-center">
                 {/* Backdrop */}

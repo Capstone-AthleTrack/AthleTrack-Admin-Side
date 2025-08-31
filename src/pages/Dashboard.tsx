@@ -149,33 +149,6 @@ export default function Dashboard() {
             </Card>
           </div>
         </section>
-
-        {/* Add margin-bottom to create space after the charts */}
-
-        {/* LIST OF SPORTS 
-         <section id="sports-section" className="mx-auto w-full px-8 pb-16">
-          <div className="mt-4 rounded-2xl bg-white p-8 shadow-xl">
-            <h2 className="text-2xl font-semibold text-center mb-8">List of Sports</h2>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
-              {sports.map((s) => (
-                <div key={s.id} className="flex flex-col items-center">
-                  <button
-                    type="button"
-                    onClick={() => openSport(s.name)}
-                    className="w-full h-40 rounded-2xl shadow-lg transition-transform duration-200 ease-in-out hover:scale-105 focus:outline-none flex justify-center items-center text-white font-semibold text-lg"
-                    aria-label={s.name}
-                    style={{
-                      backgroundColor: BRAND.maroon,
-                    }}
-                  >
-                    <span>{s.name}</span>
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>*/}
       </main>
     </div>
   );
