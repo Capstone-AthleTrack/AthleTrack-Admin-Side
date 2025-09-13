@@ -25,7 +25,7 @@ import NavBar from "@/components/NavBar";
 type ReqStatus = "Pending" | "Accepted" | "Denied";
 type ReqKind = "Users" | "AthleteRequests";
 
-type RequestItem = {
+interface RequestItem {
   id: string;
   kind: ReqKind;
   name: string;
@@ -40,7 +40,7 @@ type RequestItem = {
     pupId?: string;
     sport?: string;
   };
-};
+}
 
 const BRAND = { maroon: "#7b0f0f" };
 
@@ -104,8 +104,12 @@ export default function UserManagement() {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [form] = Form.useForm();
 
+  /* delete-confirm modal */
+  const [showConfirm, setShowConfirm] = useState(false);
+
   useEffect(() => setData(mockData), []);
 
+  /* ---------- derived lists ---------- */
   const list = useMemo(() => {
     return data
       .filter((d) => d.kind === "Users")
@@ -117,7 +121,9 @@ export default function UserManagement() {
               .some((f) => String(f).toLowerCase().includes(query.toLowerCase()))
           : true
       )
-      .sort((a, b) => dayjs(b.issuedAt).valueOf() - dayjs(a.issuedAt).valueOf());
+      .sort(
+        (a, b) => dayjs(b.issuedAt).valueOf() - dayjs(a.issuedAt).valueOf()
+      );
   }, [data, filter, query]);
 
   const selected = useMemo(
@@ -125,21 +131,18 @@ export default function UserManagement() {
     [list, selectedId]
   );
 
+  /* Keep selection valid when filters change */
   useEffect(() => {
     if (selectedId && !list.some((d) => d.id === selectedId)) setSelectedId(null);
   }, [filter, query, list, selectedId]);
 
-  // Handlers for Add User
-  const openAdd = () => setIsAddOpen(true);
-  const closeAdd = () => {
-    setIsAddOpen(false);
-    form.resetFields();
-  };
+  /* ---------- Add user ---------- */
+  const openAdd   = () => setIsAddOpen(true);
+  const closeAdd  = () => { setIsAddOpen(false); form.resetFields(); };
 
   const handleAddSubmit = async () => {
     try {
       const values = await form.validateFields();
-      
       const newUser: RequestItem = {
         id: "u-" + Date.now(),
         kind: "Users",
@@ -155,22 +158,25 @@ export default function UserManagement() {
           sport: values.sport || undefined,
         },
       };
-      
-      // Add the new user to the data state
-      setData((prev) => [newUser, ...prev]); 
+      setData((prev) => [newUser, ...prev]);
       message.success("User added.");
       closeAdd();
-      setSelectedId(newUser.id); 
-    } catch (e: unknown) {
-      // Handle error
-      if (e instanceof Error) {
-        console.error(e.message); 
-        message.error("Failed to add user. Please try again.");
-      } else {
-        console.error("An unexpected error occurred", e);
-        message.error("An unexpected error occurred.");
-      }
+      setSelectedId(newUser.id);
+    } catch (err: unknown) {
+      // optional: only log when it’s really an Error object
+      if (err instanceof Error) console.error(err);
+
+      message.error("Failed to add user.");
     }
+  };
+
+  /* ---------- Delete user ---------- */
+  const handleDelete = () => {
+    if (!selected) return;
+    setData((prev) => prev.filter((d) => d.id !== selected.id));
+    setSelectedId(null);
+    setShowConfirm(false);
+    message.success("User deleted.");
   };
 
   return (
@@ -178,8 +184,11 @@ export default function UserManagement() {
       <NavBar />
 
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-[420px_minmax(0,1fr)]">
-        {/* LEFT */}
-        <aside className="border-r text-white" style={{ background: BRAND.maroon }}>
+        {/* LEFT PANE */}
+        <aside
+          className="border-r text-white"
+          style={{ background: BRAND.maroon }}
+        >
           {/* search + filter + add */}
           <div className="px-4 pt-6 pb-3">
             <div className="flex items-center gap-2">
@@ -217,10 +226,14 @@ export default function UserManagement() {
             List of Users
           </div>
 
-          <div className="space-y-3 px-4 pb-6 overflow-y-auto max-h=[calc(100dvh-248px)]">
+          <div className="space-y-3 px-4 pb-6 overflow-y-auto max-h-[calc(100dvh-248px)]">
             {list.length === 0 && (
               <div className="rounded-xl bg-white">
-                <Empty description="No records" image={Empty.PRESENTED_IMAGE_SIMPLE} className="py-10" />
+                <Empty
+                  description="No records"
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  className="py-10"
+                />
               </div>
             )}
 
@@ -230,14 +243,22 @@ export default function UserManagement() {
                 onClick={() => setSelectedId(item.id)}
                 className={clsx(
                   "w-full flex items-center justify-between rounded-2xl px-4 py-3 bg-white shadow-sm transition",
-                  selectedId === item.id ? "ring-2 ring-offset-2" : "hover:translate-x-[2px] hover:shadow"
+                  selectedId === item.id
+                    ? "ring-2 ring-offset-2"
+                    : "hover:translate-x-[2px] hover:shadow"
                 )}
-                style={selectedId === item.id ? { boxShadow: `0 0 0 2px ${BRAND.maroon} inset` } : {}}
+                style={
+                  selectedId === item.id
+                    ? { boxShadow: `0 0 0 2px ${BRAND.maroon} inset` }
+                    : {}
+                }
               >
                 <div className="flex items-center gap-3 text-left">
                   <Avatar icon={<UserOutlined />} />
                   <div className="leading-tight">
-                    <div className="font-semibold text-gray-900">{item.name}</div>
+                    <div className="font-semibold text-gray-900">
+                      {item.name}
+                    </div>
                     <div className="text-xs text-gray-500">
                       {item.email ?? "—"} · {item.deviceName ?? "—"}
                     </div>
@@ -245,9 +266,9 @@ export default function UserManagement() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <div className="text-[11px] text-gray-400 whitespace-nowrap">
+                  <span className="text-[11px] text-gray-400 whitespace-nowrap">
                     {dayjs(item.issuedAt).fromNow()}
-                  </div>
+                  </span>
                   <RightOutlined className="text-gray-300" />
                 </div>
               </button>
@@ -255,9 +276,9 @@ export default function UserManagement() {
           </div>
         </aside>
 
-        {/* RIGHT */}
+        {/* RIGHT PANE */}
         <section className="bg-white">
-          <div className="max-w-5xl mx-auto p-6">
+          <div className="w-full p-10">
             {!selected ? (
               <div className="rounded-2xl border bg-gray-50 p-12 text-center">
                 <Empty description="Select a user from the left" />
@@ -267,31 +288,42 @@ export default function UserManagement() {
                 <div className="rounded-2xl border p-5 flex flex-wrap items-center gap-4">
                   <Avatar size={72} icon={<UserOutlined />} />
                   <div className="min-w-[220px]">
-                    <div className="text-lg font-semibold leading-tight">{selected.name}</div>
+                    <div className="text-lg font-semibold leading-tight">
+                      {selected.name}
+                    </div>
                     <div className="text-sm text-gray-500">
-                      Role: <span className="font-medium text-gray-700">{selected.extra?.role ?? "—"}</span>
+                      Role:{" "}
+                      <span className="font-medium text-gray-700">
+                        {selected.extra?.role ?? "—"}
+                      </span>
                     </div>
                   </div>
                 </div>
 
+                {/* Details */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  <Labeled value={selected.extra?.pupId ?? "—"} label="PUP ID Number" />
-                  <Labeled value={selected.extra?.sport ?? "—"} label="Sport" />
-                  <Labeled value={selected.name} label="Name" />
-                  <Labeled value={selected.email ?? "—"} label="Email Address" />
-                  <Labeled value={selected.extra?.phone ?? "—"} label="Phone Number" />
-                  <Labeled value={selected.extra?.role ?? "—"} label="Role" />
-                  <Labeled value={dayjs(selected.issuedAt).format("MMM D, YYYY")} label="Registration Date" />
+                  <Labeled
+                    value={selected.extra?.pupId}
+                    label="PUP ID Number"
+                  />
+                  <Labeled value={selected.extra?.sport} label="Sport" />
+                  <Labeled value={selected.email} label="Email Address" />
+                  <Labeled value={selected.extra?.phone} label="Phone Number" />
+                  <Labeled value={selected.extra?.role} label="Role" />
+                  <Labeled
+                    value={dayjs(selected.issuedAt).format("MMM D, YYYY")}
+                    label="Registration Date"
+                  />
                 </div>
 
+                {/* Actions */}
                 <div className="flex flex-col sm:flex-row gap-3 justify-end">
-                  <Button danger className="!h-10 !rounded-xl px-5">Delete Profile</Button>
                   <Button
-                    type="primary"
+                    danger
                     className="!h-10 !rounded-xl px-5"
-                    style={{ background: BRAND.maroon, borderColor: BRAND.maroon }}
+                    onClick={() => setShowConfirm(true)}
                   >
-                    Edit Profile
+                    Delete Profile
                   </Button>
                 </div>
               </div>
@@ -300,16 +332,17 @@ export default function UserManagement() {
         </section>
       </div>
 
-      {/* ADD USER MODAL */}
+      {/* ---------- ADD USER MODAL ---------- */}
       <Modal
         title="Add User"
-        visible={isAddOpen}         
+        open={isAddOpen}        
         onOk={handleAddSubmit}
         onCancel={closeAdd}
         okText="Save"
         cancelText="Cancel"
         centered
         width={560}
+        destroyOnClose
       >
         <Form form={form} layout="vertical">
           <Form.Item
@@ -363,6 +396,52 @@ export default function UserManagement() {
         </Form>
       </Modal>
 
+      {/* ---------- DELETE CONFIRM MODAL (custom) ---------- */}
+      {showConfirm && selected && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            onClick={() => setShowConfirm(false)}
+          />
+
+          {/* Modal card */}
+          <div className="relative z-10 w-full max-w-md rounded-2xl bg-white shadow-2xl p-6 animate-fadeIn">
+            <h3
+              className="text-xl font-bold mb-2 text-center"
+              style={{ color: BRAND.maroon }}
+            >
+              Confirm Delete
+            </h3>
+
+            <p className="text-gray-700 text-sm text-center mb-6">
+              Are you sure you want to permanently delete this user’s profile?
+              <br />
+              <span className="text-red-500 font-medium">
+                This action cannot be undone.
+              </span>
+            </p>
+
+            <div className="flex justify-center gap-4">
+              <button
+                className="px-5 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-100 transition"
+                onClick={() => setShowConfirm(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="px-5 py-2 rounded-lg text-white shadow-md hover:scale-105 transition"
+                style={{ backgroundColor: BRAND.maroon }}
+                onClick={handleDelete}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* minor custom styles */}
       <style>{`
         .side-seg { padding: 2px; font-size: 12px; }
         .side-seg .ant-segmented-item { border-radius: 9999px; padding: 2px 8px; }

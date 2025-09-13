@@ -36,17 +36,11 @@ const onFinish = async (values: ResetPasswordValues) => {
             src="/images/athletrack_logo.png"
             alt="AthleTrack"
             className="
-              w-[300px]          /* base size for smaller screens */
-              sm:w-[400px]       /* ≥640px */
-              md:w-[550px]       /* ≥768px */
-              lg:w-[700px]       /* ≥1024px */
-              xl:w-[900px]       /* ≥1280px */
-              2xl:w-[1100px]     /* ≥1536px */
-              max-w-full         /* never overflow container */
-              h-auto             /* keep aspect ratio */
+              w-[300px] sm:w-[400px] md:w-[550px] lg:w-[700px] xl:w-[900px] 2xl:w-[1100px]
+              max-w-full h-auto
+              scale-90               /* ← global shrink */
               drop-shadow-[0_10px_30px_rgba(0,0,0,0.35)]
-              transition-transform duration-300
-              hover:scale-[1.02]
+              transition-transform duration-300 hover:scale-[1.00]
             "
           />
         </div>

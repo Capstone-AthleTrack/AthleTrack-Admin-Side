@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Input, Select, Button, Empty, Avatar, Tag, message } from "antd";
-import { UserOutlined, SearchOutlined, RightOutlined } from "@ant-design/icons";
+import { Input, Select, Button, Empty, Avatar, Tag, message, Popconfirm } from "antd";
+import { UserOutlined, SearchOutlined, RightOutlined, CloseCircleOutlined, CheckCircleOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import clsx from "clsx";
 import NavBar from "@/components/NavBar";
@@ -100,17 +100,18 @@ export default function RequestManagement() {
       .sort((a, b) => dayjs(b.issuedAt).valueOf() - dayjs(a.issuedAt).valueOf());
   }, [data, filter, query]);
 
+  // FIX: always derive selected from raw data, not filtered list
   const selected = useMemo(
-    () => list.find((d) => d.id === selectedId) ?? null,
-    [list, selectedId]
+    () => data.find((d) => d.id === selectedId) ?? null,
+    [data, selectedId]
   );
-
-  useEffect(() => {
-    if (selectedId && !list.some((d) => d.id === selectedId)) setSelectedId(null);
-  }, [filter, query, list, selectedId]);
 
   const setStatus = (id: string, status: ReqStatus) => {
     setData((prev) => prev.map((d) => (d.id === id ? { ...d, status } : d)));
+
+    // optional: reset filter if item disappears
+    setFilter((curr) => (curr !== "All" && curr !== status ? "All" : curr));
+
     message.success(
       status === "Accepted" ? "Request accepted." :
       status === "Denied" ? "Request denied." : "Updated."
@@ -202,7 +203,7 @@ export default function RequestManagement() {
 
         {/* RIGHT */}
         <section className="bg-white">
-          <div className="max-w-5xl mx-auto p-6">
+          <div className="w-full p-10"> 
             {!selected ? (
               <div className="rounded-2xl border bg-gray-50 p-12 text-center">
                 <Empty description="Select an athlete request from the left" />
@@ -263,17 +264,31 @@ export default function RequestManagement() {
                 </div>
 
                 <div className="flex flex-col sm:flex-row gap-3 justify-end">
-                  <Button className="!h-10 !rounded-xl px-5" onClick={() => setStatus(selected.id, "Denied")}>
-                    Deny Request
-                  </Button>
-                  <Button
-                    type="primary"
-                    className="!h-10 !rounded-xl px-5"
-                    onClick={() => setStatus(selected.id, "Accepted")}
-                    style={{ background: BRAND.maroon, borderColor: BRAND.maroon }}
+                  <Popconfirm
+                    title="Deny this request?"
+                    icon={<CloseCircleOutlined style={{ color: "red" }} />}
+                    okText="Yes"
+                    cancelText="No"
+                    onConfirm={() => setStatus(selected.id, "Denied")}
                   >
-                    Accept Request
-                  </Button>
+                    <Button className="!h-10 !rounded-xl px-5">Deny Request</Button>
+                  </Popconfirm>
+
+                  <Popconfirm
+                    title="Accept this request?"
+                    icon={<CheckCircleOutlined style={{ color: "green" }} />}
+                    okText="Yes"
+                    cancelText="No"
+                    onConfirm={() => setStatus(selected.id, "Accepted")}
+                  >
+                    <Button
+                      type="primary"
+                      className="!h-10 !rounded-xl px-5"
+                      style={{ background: BRAND.maroon, borderColor: BRAND.maroon }}
+                    >
+                      Accept Request
+                    </Button>
+                  </Popconfirm>
                 </div>
               </div>
             )}

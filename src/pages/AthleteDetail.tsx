@@ -52,7 +52,6 @@ export default function AthleteDetail() {
 
   const key = sportName.replace(/\s+/g, "").replace(/-/g, "");
   const sport = sportDetails[key as keyof typeof sportDetails];
-  const [isEditing, setIsEditing] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   async function handleConfirmDelete() {
   // TODO: call your API to delete the athlete here
@@ -105,45 +104,37 @@ export default function AthleteDetail() {
             <p className="text-sm opacity-80 mb-6">{sport ? Object.keys(sportDetails).find(k => k === key) : ""}</p>
           </div>
 
-            {/* Form card */}
+            {/* Form card – view-only */}
             <div className="space-y-4">
-            <input
-                className="w-full rounded-md px-4 py-2 bg-white text-gray-900"
-                placeholder="Name"
-                defaultValue={athleteName}
-                readOnly={!isEditing}
-            />
-            <input
-                className="w-full rounded-md px-4 py-2 bg-white text-gray-900"
-                placeholder="Email Address"
-                defaultValue="athlete@email.com"
-                readOnly={!isEditing}
-            />
-            <div className="flex items-center gap-2">
+
+              <div className="w-full rounded-md bg-white px-4 py-2 text-gray-900">
+                {athleteName}
+                {/* <input type="hidden" name="name" value={athleteName} /> */}
+              </div>
+
+              <div className="w-full rounded-md bg-white px-4 py-2 text-gray-900">
+                athlete@email.com
+                {/* <input type="hidden" name="email" value="athlete@email.com" /> */}
+              </div>
+
+              <div className="flex items-center gap-2">
                 <span className="px-3 py-2 rounded-md bg-white text-gray-900">+63</span>
-                <input
-                className="flex-1 rounded-md px-4 py-2 bg-white text-gray-900"
-                placeholder="Phone number"
-                defaultValue="9123456789"
-                readOnly={!isEditing}
-                />
-            </div>
-            <div className="relative">
-                <select
-                className="w-full rounded-md px-4 py-2 bg-white text-gray-900"
-                disabled={!isEditing}
-                defaultValue="Athlete"
-                >
-                <option>Athlete</option>
-                <option>Coach</option>
-                </select>
-            </div>
-            <input
-                className="w-full rounded-md px-4 py-2 bg-white text-gray-900"
-                placeholder="Registration Date"
-                defaultValue="2024-08-20"
-                readOnly={!isEditing}
-            />
+                <div className="flex-1 rounded-md bg-white px-4 py-2 text-gray-900">
+                  9123456789
+                  {/* <input type="hidden" name="phone" value="9123456789" /> */}
+                </div>
+              </div>
+
+              <div className="w-full rounded-md bg-white px-4 py-2 text-gray-900">
+                Athlete
+                {/* <input type="hidden" name="role" value="Athlete" /> */}
+              </div>
+
+              <div className="w-full rounded-md bg-white px-4 py-2 text-gray-900">
+                2024-08-20
+                {/* <input type="hidden" name="registered_at" value="2024-08-20" /> */}
+              </div>
+
             </div>
 
             <div className="flex flex-col gap-3 mt-6">
@@ -153,57 +144,52 @@ export default function AthleteDetail() {
             >
                 Delete Profile
             </button>
-            <button
-                className="w-full rounded-lg bg-white text-[#{BRAND.maroon}] py-2"
-                style={{ color: BRAND.maroon }}
-                onClick={() => setIsEditing(!isEditing)}
-            >
-                {isEditing ? "Save Profile" : "Edit Profile"}
-            </button>
             </div>
 
-            {/* Confirmation modal */}
+            {/* ───── Delete-confirmation modal ───── */}
             {showConfirm && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center">
+              <div className="fixed inset-0 z-50 flex items-center justify-center">
                 {/* Backdrop */}
                 <div
-                className="absolute inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
-                onClick={() => setShowConfirm(false)}
+                  className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+                  onClick={() => setShowConfirm(false)}
                 />
 
                 {/* Modal card */}
                 <div className="relative z-10 w-full max-w-md rounded-2xl bg-white shadow-2xl p-6 animate-fadeIn">
-                {/* Header */}
-                <h3
+                  {/* Header */}
+                  <h3
                     className="text-xl font-bold mb-2 text-center"
                     style={{ color: BRAND.maroon }}
-                >
+                  >
                     Confirm Delete
-                </h3>
-                <p className="text-gray-700 text-sm text-center mb-6">
-                    Are you sure you want to permanently delete this athlete’s profile?
+                  </h3>
+                  <p className="text-gray-700 text-sm text-center mb-6">
+                    Are you sure you want to permanently delete this profile?
                     <br />
-                    <span className="text-red-500 font-medium">This action cannot be undone.</span>
-                </p>
+                    <span className="text-red-500 font-medium">
+                      This action cannot be undone.
+                    </span>
+                  </p>
 
-                {/* Actions */}
-                <div className="flex justify-center gap-4">
+                  {/* Actions */}
+                  <div className="flex justify-center gap-4">
                     <button
-                    className="px-5 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-100 transition"
-                    onClick={() => setShowConfirm(false)}
+                      className="px-5 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-100 transition"
+                      onClick={() => setShowConfirm(false)}
                     >
-                    Cancel
+                      Cancel
                     </button>
                     <button
-                    className="px-5 py-2 rounded-lg text-white shadow-md hover:scale-105 transition"
-                    style={{ backgroundColor: BRAND.maroon }}
-                    onClick={handleConfirmDelete}
+                      className="px-5 py-2 rounded-lg text-white shadow-md hover:scale-105 transition"
+                      style={{ backgroundColor: BRAND.maroon }}
+                      onClick={handleConfirmDelete}  
                     >
-                    Delete
+                      Delete
                     </button>
+                  </div>
                 </div>
-                </div>
-            </div>
+              </div>
             )}
         </aside>
 
