@@ -1,3 +1,4 @@
+// eslint.config.js
 import js from '@eslint/js'
 import globals from 'globals'
 import reactHooks from 'eslint-plugin-react-hooks'
@@ -18,6 +19,13 @@ export default tseslint.config([
     languageOptions: {
       ecmaVersion: 2020,
       globals: globals.browser,
+    },
+    rules: {
+      // ✅ Allow exporting the hook from the same file as a component
+      'react-refresh/only-export-components': [
+        'warn',
+        { allowExportNames: ['useAuth'] },
+      ],
     },
   },
 ])
