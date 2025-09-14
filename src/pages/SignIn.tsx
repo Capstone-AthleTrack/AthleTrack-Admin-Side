@@ -36,26 +36,17 @@ export default function SignIn() {
       <div aria-hidden className="absolute -top-10 -left-10 w-64 h-64 rounded-full blur-3xl opacity-20 pointer-events-none" style={{ background: BRAND.yellow }} />
       <div aria-hidden className="absolute bottom-16 right-10 w-48 h-48 rounded-full blur-3xl opacity-10 pointer-events-none" style={{ background: "#fff" }} />
 
-        {/* logo */}
-        <div className="relative z-10 flex flex-col items-center gap-5 px-6">
-          <img
-            src="/images/athletrack_logo.png"
-            alt="AthleTrack"
-            className="
-              w-[300px]          /* base size for smaller screens */
-              sm:w-[400px]       /* ≥640px */
-              md:w-[550px]       /* ≥768px */
-              lg:w-[700px]       /* ≥1024px */
-              xl:w-[900px]       /* ≥1280px */
-              2xl:w-[1100px]     /* ≥1536px */
-              max-w-full         /* never overflow container */
-              h-auto             /* keep aspect ratio */
-              drop-shadow-[0_10px_30px_rgba(0,0,0,0.35)]
-              transition-transform duration-300
-              hover:scale-[1.02]
-            "
-          />
-        </div>
+        <img
+          src="/images/athletrack_logo.png"
+          alt="AthleTrack"
+          className="
+            w-[300px] sm:w-[400px] md:w-[550px] lg:w-[700px] xl:w-[900px] 2xl:w-[1100px]
+            max-w-full h-auto
+            scale-90               /* ← global shrink */
+            drop-shadow-[0_10px_30px_rgba(0,0,0,0.35)]
+            transition-transform duration-300 hover:scale-[1.00]
+          "
+        />
       </div>
 
       {/* right side - sign in */}
