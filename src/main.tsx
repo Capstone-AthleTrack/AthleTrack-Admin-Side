@@ -6,7 +6,7 @@ import App from "./App";
 import "./styles/tailwind.css";
 import "antd/dist/reset.css";
 import { BRAND } from "./brand";
-
+import { AuthProvider } from "@/context/AuthContext";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
@@ -23,7 +23,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       }}
     >
       <BrowserRouter>
-        <App />
+        <AuthProvider>
+          <App />
+        </AuthProvider>
       </BrowserRouter>
     </ConfigProvider>
   </React.StrictMode>
