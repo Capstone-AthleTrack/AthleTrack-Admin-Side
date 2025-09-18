@@ -1,10 +1,7 @@
-import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { env } from './env';
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { env } from "./env";
 
-/**
- * Singleton Supabase client.
- * Not exported to pages/components; repositories import this ONLY.
- */
+/** Singleton Supabase client. */
 let _client: SupabaseClient | null = null;
 
 export function getSupabase(): SupabaseClient {
@@ -14,8 +11,8 @@ export function getSupabase(): SupabaseClient {
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: true,
+      storageKey: "athletrack-auth", // ← stable key
     },
   });
   return _client;
 }
-    
