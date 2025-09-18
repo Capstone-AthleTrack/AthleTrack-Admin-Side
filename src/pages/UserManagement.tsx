@@ -21,6 +21,12 @@ dayjs.extend(relativeTime);
 import clsx from "clsx";
 import NavBar from "@/components/NavBar";
 
+/* ---------- Supabase client (reads/writes public.profiles) ---------- */
+import { createClient } from "@supabase/supabase-js";
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
 /* ---------------- types + constants ---------------- */
 type ReqStatus = "Pending" | "Accepted" | "Denied";
 type ReqKind = "Users" | "AthleteRequests";
@@ -44,42 +50,58 @@ interface RequestItem {
 
 const BRAND = { maroon: "#7b0f0f" };
 
-/* ---------------- mock data (users only shown by filter) ---------------- */
-const mockData: RequestItem[] = [
-  {
-    id: "u-101",
+/* ---------- DB types (mirror of public.profiles minimal fields) ---------- */
+type DBRole = "admin" | "coach" | "athlete" | "user" | null;
+type DBStatus = "pending" | "active" | "suspended" | "disabled" | null;
+
+interface ProfileRow {
+  id: string;
+  email: string | null;
+  role: DBRole;
+  status: DBStatus;
+  full_name: string | null;
+  phone: string | null;
+  pup_id: string | null;
+  sport: string | null;
+  created_at: string | null;
+}
+
+type ProfileInsert = Partial<ProfileRow>;
+type ProfileUpdate = Partial<ProfileRow>;
+
+/* ---------- role label helpers (UI <-> DB) ---------- */
+const roleDbToUi = (r: DBRole): string | undefined =>
+  r ? r.charAt(0).toUpperCase() + r.slice(1) : undefined;
+
+const roleUiToDb = (r?: string): DBRole =>
+  (r ? r.toLowerCase() : "") as DBRole;
+
+/* ---------- Request status from profile.status (for the existing UI) ---------- */
+const statusToReq: Record<Exclude<DBStatus, null>, ReqStatus> = {
+  pending: "Pending",
+  active: "Accepted",
+  suspended: "Denied",
+  disabled: "Denied",
+};
+
+/* ---------- map DB row -> existing UI item shape ---------- */
+function toItem(p: ProfileRow): RequestItem {
+  return {
+    id: p.id,
     kind: "Users",
-    name: "User Account",
-    email: "user1@athletrack.ph",
-    deviceName: "iPhone 13 • Safari",
-    issuedAt: dayjs().subtract(2, "hour").toISOString(),
-    status: "Pending",
-    reason: "New device sign-in",
-    extra: { role: "Coach", phone: "+63 912 123 4567" },
-  },
-  {
-    id: "u-102",
-    kind: "Users",
-    name: "User Account",
-    email: "user2@athletrack.ph",
-    deviceName: "Macbook Pro • Chrome",
-    issuedAt: dayjs().subtract(1, "day").toISOString(),
-    status: "Denied",
-    reason: "Suspicious device",
-    extra: { role: "Admin" },
-  },
-  {
-    id: "a-201",
-    kind: "AthleteRequests",
-    name: "Athlete's Name",
-    email: "athlete@athletrack.ph",
-    deviceName: "OPPO A96 • Chrome",
-    issuedAt: dayjs().subtract(5, "hour").toISOString(),
-    status: "Pending",
-    reason: "First log-in request",
-    extra: { pupId: "PUP-23-001", sport: "Basketball" },
-  },
-];
+    name: p.full_name || "User Account",
+    email: p.email ?? undefined,
+    deviceName: undefined, // not stored; keep placeholder
+    issuedAt: p.created_at || new Date().toISOString(),
+    status: statusToReq[(p.status ?? "pending") as Exclude<DBStatus, null>],
+    extra: {
+      role: roleDbToUi(p.role),
+      phone: p.phone ?? undefined,
+      pupId: p.pup_id ?? undefined,
+      sport: p.sport ?? undefined,
+    },
+  };
+}
 
 /* ---------------- small helper ---------------- */
 function Labeled({ label, value }: { label: string; value?: string }) {
@@ -104,10 +126,44 @@ export default function UserManagement() {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [form] = Form.useForm();
 
+  // Edit User modal (opens when you double-click the details panel on the right)
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editForm] = Form.useForm();
+
   /* delete-confirm modal */
   const [showConfirm, setShowConfirm] = useState(false);
 
-  useEffect(() => setData(mockData), []);
+  /* ---------- load from Supabase (replace mock) ---------- */
+  async function loadProfiles() {
+    const { data: rows, error } = await supabase
+      .from("profiles")
+      .select(
+        "id,email,role,status,full_name,phone,pup_id,sport,created_at"
+      )
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error(error);
+      message.error("Failed to load profiles.");
+      return;
+    }
+
+    const items = (rows as ProfileRow[]).map(toItem);
+    setData(items);
+
+    // keep selection valid
+    if (selectedId && !items.some((d) => d.id === selectedId)) {
+      setSelectedId(null);
+    }
+  }
+
+  useEffect(() => {
+    loadProfiles();
+    // Also reload when auth state changes (keeps list fresh after edits elsewhere)
+    const sub = supabase.auth.onAuthStateChange(() => loadProfiles());
+    return () => sub.data.subscription.unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* ---------- derived lists ---------- */
   const list = useMemo(() => {
@@ -143,40 +199,96 @@ export default function UserManagement() {
   const handleAddSubmit = async () => {
     try {
       const values = await form.validateFields();
-      const newUser: RequestItem = {
-        id: "u-" + Date.now(),
-        kind: "Users",
-        name: values.name,
+
+      // Insert into public.profiles (DB will default created_at / id if set)
+      const payload: ProfileInsert = {
         email: values.email,
-        deviceName: values.deviceName || undefined,
-        issuedAt: new Date().toISOString(),
-        status: "Pending",
-        extra: {
-          role: values.role,
-          phone: values.phone || undefined,
-          pupId: values.pupId || undefined,
-          sport: values.sport || undefined,
-        },
+        role: roleUiToDb(values.role),
+        status: "active",
+        full_name: values.name ?? null,
+        phone: values.phone ?? null,
+        pup_id: values.pupId ?? null,
+        sport: values.sport ?? null,
       };
-      setData((prev) => [newUser, ...prev]);
+
+      const { error } = await supabase
+        .from("profiles")
+        .insert(payload);
+
+      if (error) throw error;
+
       message.success("User added.");
       closeAdd();
-      setSelectedId(newUser.id);
+      await loadProfiles();
     } catch (err: unknown) {
-      // optional: only log when it’s really an Error object
       if (err instanceof Error) console.error(err);
-
       message.error("Failed to add user.");
     }
   };
 
-  /* ---------- Delete user ---------- */
-  const handleDelete = () => {
+  /* ---------- Edit user (open by double-click on details card) ---------- */
+  const openEdit = () => {
     if (!selected) return;
-    setData((prev) => prev.filter((d) => d.id !== selected.id));
-    setSelectedId(null);
-    setShowConfirm(false);
-    message.success("User deleted.");
+    setIsEditOpen(true);
+    editForm.setFieldsValue({
+      name: selected.name || "",
+      email: selected.email || "",
+      role: selected.extra?.role || "User",
+      phone: selected.extra?.phone || "",
+      pupId: selected.extra?.pupId || "",
+      sport: selected.extra?.sport || "",
+    });
+  };
+  const closeEdit = () => {
+    setIsEditOpen(false);
+    editForm.resetFields();
+  };
+  const handleEditSubmit = async () => {
+    if (!selected) return;
+    try {
+      const values = await editForm.validateFields();
+
+      const update: ProfileUpdate = {
+        full_name: values.name ?? null,
+        email: values.email ?? null,
+        role: roleUiToDb(values.role),
+        phone: values.phone ?? null,
+        pup_id: values.pupId ?? null,
+        sport: values.sport ?? null,
+      };
+
+      const { error } = await supabase
+        .from("profiles")
+        .update(update)
+        .eq("id", selected.id);
+
+      if (error) throw error;
+
+      message.success("Profile updated.");
+      closeEdit();
+      await loadProfiles();
+      setSelectedId(selected.id); // keep focus
+    } catch (err: unknown) {
+      if (err instanceof Error) console.error(err);
+      message.error("Failed to update profile.");
+    }
+  };
+
+  /* ---------- Delete user ---------- */
+  const handleDelete = async () => {
+    if (!selected) return;
+    try {
+      const { error } = await supabase.from("profiles").delete().eq("id", selected.id);
+      if (error) throw error;
+
+      setSelectedId(null);
+      setShowConfirm(false);
+      message.success("User deleted.");
+      await loadProfiles();
+    } catch (err: unknown) {
+      if (err instanceof Error) console.error(err);
+      message.error("Failed to delete profile.");
+    }
   };
 
   return (
@@ -284,7 +396,7 @@ export default function UserManagement() {
                 <Empty description="Select a user from the left" />
               </div>
             ) : (
-              <div className="space-y-5">
+              <div className="space-y-5" onDoubleClick={openEdit}>
                 <div className="rounded-2xl border p-5 flex flex-wrap items-center gap-4">
                   <Avatar size={72} icon={<UserOutlined />} />
                   <div className="min-w-[220px]">
@@ -375,6 +487,72 @@ export default function UserManagement() {
                 options={[
                   { label: "Coach", value: "Coach" },
                   { label: "Athlete", value: "Athlete" },
+                ]}
+              />
+            </Form.Item>
+
+            <Form.Item label="Phone" name="phone">
+              <Input placeholder="+63 9XX XXX XXXX" />
+            </Form.Item>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Form.Item label="PUP ID" name="pupId">
+              <Input placeholder="e.g. PUP-23-001" />
+            </Form.Item>
+
+            <Form.Item label="Sport" name="sport">
+              <Input placeholder="e.g. Basketball" />
+            </Form.Item>
+          </div>
+        </Form>
+      </Modal>
+
+      {/* ---------- EDIT USER MODAL (opens on double-click) ---------- */}
+      <Modal
+        title="Edit User"
+        open={isEditOpen}
+        onOk={handleEditSubmit}
+        onCancel={closeEdit}
+        okText="Save"
+        cancelText="Cancel"
+        centered
+        width={560}
+        destroyOnClose
+      >
+        <Form form={editForm} layout="vertical">
+          <Form.Item
+            label="Full Name"
+            name="name"
+            rules={[{ required: true, message: "Please enter full name" }]}
+          >
+            <Input placeholder="e.g. Juan Dela Cruz" />
+          </Form.Item>
+
+          <Form.Item
+            label="Email Address"
+            name="email"
+            rules={[
+              { required: true, message: "Please enter email" },
+              { type: "email", message: "Invalid email" },
+            ]}
+          >
+            <Input placeholder="name@athletrack.ph" />
+          </Form.Item>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Form.Item
+              label="Role"
+              name="role"
+              rules={[{ required: true, message: "Select a role" }]}
+            >
+              <Select
+                placeholder="Select role"
+                options={[
+                  { label: "Coach", value: "Coach" },
+                  { label: "Athlete", value: "Athlete" },
+                  { label: "Admin", value: "Admin" },
+                  { label: "User", value: "User" },
                 ]}
               />
             </Form.Item>

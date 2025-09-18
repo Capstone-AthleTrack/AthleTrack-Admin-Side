@@ -3,5 +3,11 @@
   "references": [
     { "path": "./tsconfig.app.json" },
     { "path": "./tsconfig.node.json" }
+  ],
+  "include": [],
+  "exclude": [
+    "supabase/functions/**",
+    "supabase/**/deno.json",
+    "supabase/**/import_map.json"
   ]
 }

@@ -7,7 +7,6 @@ import "./styles/tailwind.css";
 import "antd/dist/reset.css";
 import { BRAND } from "./brand";
 
-
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ConfigProvider
@@ -23,7 +22,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       }}
     >
       <BrowserRouter>
-        <App />
+          <App />
       </BrowserRouter>
     </ConfigProvider>
   </React.StrictMode>
