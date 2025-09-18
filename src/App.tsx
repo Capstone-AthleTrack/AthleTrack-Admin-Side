@@ -1,10 +1,11 @@
+import { useEffect, useState } from "react";
+import type { ReactElement } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 
 /* ── Public pages ── */
 import SignIn from "./pages/SignIn";
 import SignUp from "./pages/SignUp";
 import ResetPassword from "./pages/ResetPassword";
-import AuthCallback from "./pages/AuthCallback";
 
 /* ── Staff (protected) pages ── */
 import Dashboard from "./pages/Dashboard";
@@ -15,81 +16,137 @@ import UserManagement from "./pages/UserManagement";
 import RequestManagement from "./pages/RequestManagement";
 import Settings from "./pages/Settings";
 
-/* ── Guard ── */
-import ProtectedRoute from "./components/ProtectedRoute";
+/* ── shared supabase singleton ── */
+import { getSupabase } from "@/core/supabase";
+const supabase = getSupabase();
+
+const isPupMail = (email?: string | null) =>
+  !!email && email.toLowerCase().endsWith("@iskolarngbayan.pup.edu.ph");
+
+/** Invisible route guard:
+ * - must be signed in
+ * - must be PUP webmail
+ * - must have profiles.role='admin' AND (profiles.status='active' OR profiles.is_active=true)
+ * Otherwise → redirect to /sign-in
+ */
+function RequireAdminActive({ children }: { children: ReactElement }): ReactElement | null {
+  const [ready, setReady] = useState(false);
+  const [redirect, setRedirect] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+
+      if (!session || !session.user) {
+        if (isMounted) { setRedirect("/sign-in"); setReady(true); }
+        return;
+      }
+
+      if (!isPupMail(session.user.email)) {
+        await supabase.auth.signOut().catch(() => {});
+        if (isMounted) { setRedirect("/sign-in"); setReady(true); }
+        return;
+      }
+
+      // NOTE: select both status and is_active to be compatible with older schema
+      const { data: prof } = await supabase
+        .from("profiles")
+        .select("role,status,is_active")
+        .eq("id", session.user.id)
+        .maybeSingle();
+
+      const isAdmin = prof?.role === "admin";
+      const isActive =
+        prof?.status === "active" ||
+        (prof?.status == null && prof?.is_active === true);
+
+      const ok = isAdmin && isActive;
+
+      if (isMounted) {
+        setRedirect(ok ? null : "/sign-in");
+        setReady(true);
+      }
+    })();
+    return () => { isMounted = false; };
+  }, []);
+
+  if (!ready) return null;
+  if (redirect) return <Navigate to={redirect} replace />;
+  return children;
+}
 
 export default function App() {
   return (
     <Routes>
-      {/* Default → dashboard (guard decides sign-in vs allow) */}
-      <Route path="/" element={<Navigate to="/dashboard" replace />} />
+      {/* Default → sign-in */}
+      <Route path="/" element={<Navigate to="/sign-in" replace />} />
 
       {/* Public auth routes */}
       <Route path="/sign-in" element={<SignIn />} />
       <Route path="/sign-up" element={<SignUp />} />
       <Route path="/reset-password" element={<ResetPassword />} />
-      <Route path="/auth/callback" element={<AuthCallback />} />
 
-      {/* Protected staff routes */}
+      {/* Protected staff routes (wrapped with invisible guard) */}
       <Route
         path="/dashboard"
         element={
-          <ProtectedRoute>
+          <RequireAdminActive>
             <Dashboard />
-          </ProtectedRoute>
+          </RequireAdminActive>
         }
       />
       <Route
         path="/sports"
         element={
-          <ProtectedRoute>
+          <RequireAdminActive>
             <Sports />
-          </ProtectedRoute>
+          </RequireAdminActive>
         }
       />
       <Route
         path="/sports/:sportName"
         element={
-          <ProtectedRoute>
+          <RequireAdminActive>
             <SportDetail />
-          </ProtectedRoute>
+          </RequireAdminActive>
         }
       />
       <Route
         path="/sports/:sportName/athletes/:athleteName"
         element={
-          <ProtectedRoute>
+          <RequireAdminActive>
             <AthleteDetail />
-          </ProtectedRoute>
+          </RequireAdminActive>
         }
       />
       <Route
         path="/user-management"
         element={
-          <ProtectedRoute>
+          <RequireAdminActive>
             <UserManagement />
-          </ProtectedRoute>
+          </RequireAdminActive>
         }
       />
       <Route
         path="/manage-requests"
         element={
-          <ProtectedRoute>
+          <RequireAdminActive>
             <RequestManagement />
-          </ProtectedRoute>
+          </RequireAdminActive>
         }
       />
       <Route
         path="/settings"
         element={
-          <ProtectedRoute>
+          <RequireAdminActive>
             <Settings />
-          </ProtectedRoute>
+          </RequireAdminActive>
         }
       />
 
-      {/* Fallback */}
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      {/* Fallback → sign-in */}
+      <Route path="*" element={<Navigate to="/sign-in" replace />} />
     </Routes>
   );
 }
