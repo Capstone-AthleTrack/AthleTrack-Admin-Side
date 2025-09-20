@@ -23,6 +23,10 @@ import { useNavigate } from "react-router-dom";
 import NavBar from "@/components/NavBar";
 import { BRAND } from "@/brand";
 
+/* ── services (wired, no UI change) ── */
+import { getMyProfile, updateMyProfile } from "@/services/profile";
+import { changePassword } from "@/services/authSecurity";
+
 const { Item } = Form;
 
 /* ───────── TYPES ───────── */
@@ -30,6 +34,7 @@ interface ProfileValues {
   fullName: string;
   email: string;
   phone: string;
+  pupId: string;        // ← new field for PUP ID
 }
 interface SecurityValues {
   currentPassword: string;
@@ -42,13 +47,14 @@ const mockProfile: ProfileValues = {
   fullName: "Juan Dela Cruz",
   email: "admin@example.com",
   phone: "09345678234",
+  pupId: "",            // default empty
 };
 
 export default function Settings() {
   const navigate = useNavigate();
 
   /* state */
-  const [avatarUrl, setAvatarUrl] = useState<string>();          // live preview
+  const [avatarUrl, setAvatarUrl] = useState<string>();           // live preview
   const [savedAvatarUrl, setSavedAvatarUrl] = useState<string>(); // last-saved
   const [savedProfile, setSavedProfile] = useState<ProfileValues>(mockProfile);
   const [loading, setLoading] = useState(false);
@@ -62,35 +68,68 @@ export default function Settings() {
 
   /* preload data */
   useEffect(() => {
+    // Load real profile from Supabase
+    (async () => {
+      try {
+        const p = await getMyProfile(); // { full_name, email, pup_id, phone }
+        const mapped: ProfileValues = {
+          fullName: p.full_name ?? "",
+          email: (p.email ?? "") as string,
+          phone: p.phone ?? "",
+          pupId: p.pup_id ?? "",
+        };
+        setSavedProfile(mapped);
+      } catch (e) {
+        // keep mock if fail
+        msgApi.error((e as Error)?.message || "Failed to load profile.");
+      }
+    })();
+  }, [msgApi]);
+
+  useEffect(() => {
     profileForm.setFieldsValue(savedProfile);
     setAvatarUrl(savedAvatarUrl);
   }, [profileForm, savedProfile, savedAvatarUrl]);
 
-  /* ───────── API mocks ───────── */
+  /* ───────── API handlers ───────── */
   const saveProfile = async (values: ProfileValues) => {
     setLoading(true);
     try {
-      console.log("Profile values:", values); // 🔗 connect API here
+      // Persist to DB (email is read-only on backend; do not update it)
+      await updateMyProfile({
+        full_name: values.fullName,
+        phone: values.phone || null,
+        pup_id: values.pupId || null,
+      });
       msgApi.success("Profile updated successfully!");
 
-      // Persist new “saved” snapshot
-      setSavedProfile(values);
+      // Persist new “saved” snapshot (keep backend email mirror)
+      setSavedProfile({
+        fullName: values.fullName,
+        email: savedProfile.email, // ignore any edited email in UI; keep server email
+        phone: values.phone,
+        pupId: values.pupId,
+      });
       setSavedAvatarUrl(avatarUrl ?? "");
 
       setIsEditing(false);
-    } catch {
-      msgApi.error("Failed to update profile.");
+    } catch (e) {
+      msgApi.error((e as Error)?.message || "Failed to update profile.");
     } finally {
       setLoading(false);
     }
   };
+
   const saveSecurity = async (values: SecurityValues) => {
     setLoading(true);
     try {
-      console.log("Security values:", values); // 🔗 connect API here
+      await changePassword({
+        currentPassword: values.currentPassword,
+        newPassword: values.newPassword,
+      });
       msgApi.success("Password changed successfully!");
-    } catch {
-      msgApi.error("Failed to change password.");
+    } catch (e) {
+      msgApi.error((e as Error)?.message || "Failed to change password.");
     } finally {
       setLoading(false);
     }
@@ -190,6 +229,11 @@ export default function Settings() {
               { pattern: /^(\+?\d{1,3}[- ]?)?\d{10,11}$/, message: "Enter a valid phone number" },
             ]}
           >
+            <Input size="large" prefix={<UserOutlined />} readOnly={!isEditing} />
+          </Item>
+
+          {/* NEW: PUP ID (optional) */}
+          <Item label="PUP ID" name="pupId">
             <Input size="large" prefix={<UserOutlined />} readOnly={!isEditing} />
           </Item>
         </div>

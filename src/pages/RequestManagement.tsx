@@ -5,9 +5,26 @@ import dayjs from "dayjs";
 import clsx from "clsx";
 import NavBar from "@/components/NavBar";
 
+/* 🔌 services only (NO UI CHANGES) */
+import {
+  listAccountRequests,
+  approveAccount,
+  denyAccount,
+  type AccountRequest as DbReq,
+} from "@/services/accountRequests";
+
 /* ---------------- types + constants ---------------- */
 type ReqStatus = "Pending" | "Accepted" | "Denied";
 type ReqKind = "Users" | "AthleteRequests";
+type FinalRole = "athlete" | "coach" | "admin";
+
+/** Extend DB row with optional fields we may or may not have */
+type AccountRequestRow = DbReq & {
+  device_name?: string | null;
+  pup_id?: string | null;
+  sport?: string | null;
+  phone?: string | null;
+};
 
 type RequestItem = {
   id: string;
@@ -28,44 +45,7 @@ type RequestItem = {
 
 const BRAND = { maroon: "#7b0f0f" };
 
-/* ---------------- mock data (requests shown by filter) ---------------- */
-const mockData: RequestItem[] = [
-  {
-    id: "a-201",
-    kind: "AthleteRequests",
-    name: "Athlete's Name",
-    email: "athlete@athletrack.ph",
-    deviceName: "OPPO A96 • Chrome",
-    issuedAt: dayjs().subtract(5, "hour").toISOString(),
-    status: "Pending",
-    reason: "First log-in request",
-    extra: { pupId: "PUP-23-001", sport: "Basketball" },
-  },
-  {
-    id: "a-202",
-    kind: "AthleteRequests",
-    name: "Athlete's Name",
-    email: "athlete2@athletrack.ph",
-    deviceName: "iPad • Safari",
-    issuedAt: dayjs().subtract(3, "day").toISOString(),
-    status: "Accepted",
-    reason: "Verified by coach",
-    extra: { pupId: "PUP-23-007", sport: "Volleyball" },
-  },
-  {
-    id: "u-101",
-    kind: "Users",
-    name: "User Account",
-    email: "user1@athletrack.ph",
-    deviceName: "iPhone 13 • Safari",
-    issuedAt: dayjs().subtract(2, "hour").toISOString(),
-    status: "Pending",
-    reason: "New device sign-in",
-    extra: { role: "Coach", phone: "+63 912 123 4567" },
-  },
-];
-
-/* ---------------- small helper ---------------- */
+/* ---------------- small helpers ---------------- */
 function Labeled({ label, value }: { label: string; value?: string }) {
   return (
     <label className="block">
@@ -76,6 +56,12 @@ function Labeled({ label, value }: { label: string; value?: string }) {
     </label>
   );
 }
+const toUiStatus = (s: string | null | undefined): ReqStatus =>
+  (s ?? "").toLowerCase() === "approved"
+    ? "Accepted"
+    : (s ?? "").toLowerCase() === "denied"
+    ? "Denied"
+    : "Pending";
 
 /* ---------------- page ---------------- */
 export default function RequestManagement() {
@@ -83,8 +69,56 @@ export default function RequestManagement() {
   const [filter, setFilter] = useState<string>("All");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  useEffect(() => setData(mockData), []);
+  // ---- load from backend (replaces old mockData) ----
+  const refreshRequests = async () => {
+    try {
+      setLoading(true);
+      const rows = (await listAccountRequests()) as AccountRequestRow[];
+
+      // map backend rows → current UI shape (no JSX changes)
+      const mapped: RequestItem[] = rows.map((r) => ({
+        id: r.id,
+        kind: "AthleteRequests",
+        name: r.full_name || "",
+        email: r.email || undefined,
+        deviceName: r.device_name || undefined,
+        issuedAt: r.created_at || new Date().toISOString(),
+        status: toUiStatus(r.status),
+        reason: r.reason || "",
+        extra: {
+          role: r.desired_role
+            ? `${String(r.desired_role).charAt(0).toUpperCase()}${String(r.desired_role).slice(1)}`
+            : "Athlete",
+          pupId: r.pup_id || undefined,
+          sport: r.sport || undefined,
+          phone: r.phone || undefined,
+        },
+      }));
+
+      setData(mapped);
+
+      // keep selection stable if still present
+      if (selectedId && !mapped.find((m) => m.id === selectedId)) {
+        setSelectedId(null);
+      }
+    } catch (e) {
+      if (e instanceof Error) {
+        message.error(e.message);
+      } else {
+        message.error("Failed to load requests");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshRequests();
+    // (Realtime subscription omitted for now; add once your core client export is confirmed.)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const list = useMemo(() => {
     return data
@@ -106,16 +140,39 @@ export default function RequestManagement() {
     [data, selectedId]
   );
 
-  const setStatus = (id: string, status: ReqStatus) => {
-    setData((prev) => prev.map((d) => (d.id === id ? { ...d, status } : d)));
+  // ---- accept/deny wiring (NO UI CHANGES) ----
+  const setStatus = async (id: string, status: ReqStatus) => {
+    const item = data.find((d) => d.id === id);
+    if (!item) return;
 
-    // optional: reset filter if item disappears
-    setFilter((curr) => (curr !== "All" && curr !== status ? "All" : curr));
+    // REQUIRE reason before calling backend (per spec)
+    const reason = (item.reason ?? "").trim();
+    if (!reason) {
+      message.error("Reason is required before approving/denying.");
+      return;
+    }
 
-    message.success(
-      status === "Accepted" ? "Request accepted." :
-      status === "Denied" ? "Request denied." : "Updated."
-    );
+    try {
+      if (status === "Accepted") {
+        const finalRole: FinalRole =
+          (item.extra?.role?.toLowerCase() as FinalRole) || "athlete";
+        await approveAccount({ id: item.id, finalRole, reason });
+      } else if (status === "Denied") {
+        await denyAccount({ id: item.id, reason });
+      }
+      await refreshRequests();
+
+      // optional: reset filter if item disappears from current view
+      setFilter((curr) => (curr !== "All" && curr !== status ? "All" : curr));
+
+      message.success(status === "Accepted" ? "Request accepted." : "Request denied.");
+    } catch (e) {
+      if (e instanceof Error) {
+        message.error(e.message);
+      } else {
+        message.error("Action failed.");
+      }
+    }
   };
 
   return (
@@ -145,6 +202,7 @@ export default function RequestManagement() {
                   { label: "Accepted", value: "Accepted" },
                   { label: "Denied", value: "Denied" },
                 ]}
+                loading={loading}
               />
             </div>
           </div>
@@ -203,7 +261,7 @@ export default function RequestManagement() {
 
         {/* RIGHT */}
         <section className="bg-white">
-          <div className="w-full p-10"> 
+          <div className="w-full p-10">
             {!selected ? (
               <div className="rounded-2xl border bg-gray-50 p-12 text-center">
                 <Empty description="Select an athlete request from the left" />

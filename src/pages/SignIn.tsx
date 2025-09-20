@@ -5,8 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { BRAND } from "@/brand";
 
 /* shared supabase singleton */
-import { getSupabase } from "@/core/supabase";
-const supabase = getSupabase();
+import { supabase } from "@/core/supabase";
 
 import {
   postSignUpBootstrap,
