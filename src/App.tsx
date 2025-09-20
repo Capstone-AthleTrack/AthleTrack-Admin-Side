@@ -17,8 +17,7 @@ import RequestManagement from "./pages/RequestManagement";
 import Settings from "./pages/Settings";
 
 /* ── shared supabase singleton ── */
-import { getSupabase } from "@/core/supabase";
-const supabase = getSupabase();
+import { supabase } from "@/core/supabase";
 
 const isPupMail = (email?: string | null) =>
   !!email && email.toLowerCase().endsWith("@iskolarngbayan.pup.edu.ph");

@@ -1,8 +1,6 @@
+// src/services/admin-approval.ts
 /* Admin approval glue — NO UI CHANGES */
-import type { SupabaseClient } from "@supabase/supabase-js";
-import { getSupabase } from "../core/supabase"; // ← use your singleton
-
-const supabase: SupabaseClient = getSupabase();
+import { supabase } from "@/core/supabase";
 
 /* ----------------------------- types ----------------------------- */
 export type AdminRequestRow = {
@@ -26,14 +24,17 @@ export type ProfileRow = {
 
 /* -------------------------- edge helper -------------------------- */
 async function callEdge<T = unknown>(name: string, init?: RequestInit): Promise<T> {
-  const session = (await supabase.auth.getSession()).data.session;
+  const { data: sessionData, error: sessErr } = await supabase.auth.getSession();
+  if (sessErr) throw sessErr;
+  const session = sessionData.session;
   if (!session) throw new Error("Not authenticated");
 
   const headers = new Headers(init?.headers);
   headers.set("Authorization", `Bearer ${session.access_token}`);
   if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
 
-  const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/${name}`, {
+  const base = import.meta.env.VITE_SUPABASE_URL as string;
+  const res = await fetch(`${base}/functions/v1/${name}`, {
     ...init,
     headers,
   });
@@ -79,7 +80,8 @@ export async function rejectAdmin(requestId: string, reason?: string) {
 }
 
 export async function listAdminRequests(): Promise<AdminRequestRow[]> {
-  const { data: userData } = await supabase.auth.getUser();
+  const { data: userData, error: userErr } = await supabase.auth.getUser();
+  if (userErr) throw userErr;
   const user = userData.user;
   if (!user) throw new Error("Not authenticated");
 
@@ -104,16 +106,18 @@ export async function listAdminRequests(): Promise<AdminRequestRow[]> {
 }
 
 export async function getMyProfile(): Promise<ProfileRow | null> {
-  const { data: userData } = await supabase.auth.getUser();
+  const { data: userData, error: userErr } = await supabase.auth.getUser();
+  if (userErr) throw userErr;
   const user = userData.user;
   if (!user) return null;
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("profiles")
     .select("id,email,role,status")
     .eq("id", user.id)
     .maybeSingle()
     .returns<ProfileRow>();
+  if (error) throw error;
 
   return data ?? null;
 }
