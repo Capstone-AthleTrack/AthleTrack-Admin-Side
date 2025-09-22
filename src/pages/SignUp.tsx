@@ -1,20 +1,17 @@
-import { useState } from "react";
+import { useState } from "react";  
 import { Card, Form, Input, Button, Typography, Divider, message } from "antd";
 import { MailOutlined, LockOutlined, UserOutlined } from "@ant-design/icons";
 import { BRAND } from "@/brand";
-import { createClient } from "@supabase/supabase-js";
+import supabase from "@/core/supabase";
 import { postSignUpBootstrap, submitAdminRequest } from "@/services/admin-approval";
 
 interface SignUpFormValues {
   fullName: string;
+  pupId: string;
   email: string;
   password: string;
   confirm: string;
 }
-
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const isPupMail = (email?: string | null) =>
   !!email && email.toLowerCase().endsWith("@iskolarngbayan.pup.edu.ph");
@@ -38,7 +35,7 @@ export default function SignUp() {
         email: values.email,
         password: values.password,
         options: {
-          data: { full_name: values.fullName },
+          data: { full_name: values.fullName, pup_id: values.pupId },
         },
       });
 
@@ -167,6 +164,26 @@ export default function SignUp() {
                 size="large"
                 prefix={<UserOutlined className="text-black/40 mr-1" />}
                 placeholder="Juan Dela Cruz"
+                className="rounded-xl"
+                style={{
+                  background: "#FFE681",
+                  borderRadius: 6,
+                  height: 38,
+                  borderColor: "transparent",
+                }}
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={<span className="text-[17px] font-medium">PUP ID</span>}
+              name="pupId"
+              rules={[{ required: true, message: "PUP ID is required" }]}
+              style={{ marginBottom: 14 }}
+            >
+              <Input
+                size="large"
+                prefix={<UserOutlined className="text-black/40 mr-1" />}
+                placeholder="e.g., 20XX-12345-MN-0"
                 className="rounded-xl"
                 style={{
                   background: "#FFE681",

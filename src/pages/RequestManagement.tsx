@@ -1,29 +1,41 @@
 import { useEffect, useMemo, useState } from "react";
 import { Input, Select, Button, Empty, Avatar, Tag, message, Popconfirm } from "antd";
-import { UserOutlined, SearchOutlined, RightOutlined, CloseCircleOutlined, CheckCircleOutlined } from "@ant-design/icons";
+import {
+  UserOutlined,
+  SearchOutlined,
+  RightOutlined,
+  CloseCircleOutlined,
+  CheckCircleOutlined,
+} from "@ant-design/icons";
 import dayjs from "dayjs";
 import clsx from "clsx";
 import NavBar from "@/components/NavBar";
 
-/* 🔌 services only (NO UI CHANGES) */
-import {
-  listAccountRequests,
-  approveAccount,
-  denyAccount,
-  type AccountRequest as DbReq,
-} from "@/services/accountRequests";
+/* 🔌 use ONLY the shared Supabase singleton so apikey/auth headers are present */
+import { supabase } from "@/core/supabase";
 
 /* ---------------- types + constants ---------------- */
 type ReqStatus = "Pending" | "Accepted" | "Denied";
 type ReqKind = "Users" | "AthleteRequests";
 type FinalRole = "athlete" | "coach" | "admin";
 
-/** Extend DB row with optional fields we may or may not have */
-type AccountRequestRow = DbReq & {
-  device_name?: string | null;
+/** Raw row shape from public.account_requests (safe minimal superset) */
+type DbReqRow = {
+  id: string;
+  user_id: string | null;
+  email: string | null;
+  full_name: string | null;
+  device_name: string | null;
+  desired_role: string | null;
+  status: string | null;
+  reason: string | null;
+  created_at: string | null;
+  decided_by?: string | null;
+  decided_at?: string | null;
+  // optional extras if present
+  phone?: string | null;
   pup_id?: string | null;
   sport?: string | null;
-  phone?: string | null;
 };
 
 type RequestItem = {
@@ -36,11 +48,22 @@ type RequestItem = {
   status: ReqStatus;
   reason?: string;
   extra?: {
+    userId?: string;
     role?: string;
     phone?: string;
     pupId?: string;
     sport?: string;
+    decidedById?: string;
+    decidedByName?: string;
+    decidedAt?: string;
   };
+};
+
+/** Minimal profile shape for name lookup (avoids `any`) */
+type MiniProfile = {
+  id: string;
+  full_name: string | null;
+  email: string | null;
 };
 
 const BRAND = { maroon: "#7b0f0f" };
@@ -71,11 +94,62 @@ export default function RequestManagement() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // ---- load from backend (replaces old mockData) ----
+  // tie the existing Reason field to state
+  const [reasonDraft, setReasonDraft] = useState("");
+
+  // ---- load from backend (replaces old mock/services) ----
   const refreshRequests = async () => {
     try {
       setLoading(true);
-      const rows = (await listAccountRequests()) as AccountRequestRow[];
+
+      const { data: rowsRaw, error } = await supabase
+        .from("account_requests")
+        .select(
+          [
+            "id",
+            "user_id",
+            "email",
+            "full_name",
+            "device_name",
+            "desired_role",
+            "status",
+            "reason",
+            "created_at",
+            "decided_by",
+            "decided_at",
+            "phone",
+            "pup_id",
+            "sport",
+          ].join(",")
+        )
+        .order("created_at", { ascending: false })
+        .range(0, 199); // up to 200
+
+      if (error) throw error;
+
+      const rows = (Array.isArray(rowsRaw) ? rowsRaw : []) as unknown as DbReqRow[];
+
+      // fetch names of deciding admins (if any)
+      const adminIds = Array.from(
+        new Set(rows.map((r) => r.decided_by).filter((v): v is string => !!v))
+      );
+
+      let decidedNameById: Record<string, string> = {};
+      if (adminIds.length) {
+        const { data: admins, error: adminErr } = await supabase
+          .from("profiles")
+          .select("id,full_name,email")
+          .in("id", adminIds);
+
+        if (adminErr) throw adminErr;
+
+        const adminsTyped = (admins ?? []) as unknown as MiniProfile[];
+
+        decidedNameById = adminsTyped.reduce<Record<string, string>>((acc, p) => {
+          acc[p.id] = p.full_name || p.email || p.id;
+          return acc;
+        }, {});
+      }
 
       // map backend rows → current UI shape (no JSX changes)
       const mapped: RequestItem[] = rows.map((r) => ({
@@ -88,12 +162,16 @@ export default function RequestManagement() {
         status: toUiStatus(r.status),
         reason: r.reason || "",
         extra: {
+          userId: r.user_id || undefined,
           role: r.desired_role
             ? `${String(r.desired_role).charAt(0).toUpperCase()}${String(r.desired_role).slice(1)}`
             : "Athlete",
           pupId: r.pup_id || undefined,
           sport: r.sport || undefined,
           phone: r.phone || undefined,
+          decidedById: r.decided_by || undefined,
+          decidedByName: r.decided_by ? decidedNameById[r.decided_by] : undefined,
+          decidedAt: r.decided_at || undefined,
         },
       }));
 
@@ -116,9 +194,14 @@ export default function RequestManagement() {
 
   useEffect(() => {
     void refreshRequests();
-    // (Realtime subscription omitted for now; add once your core client export is confirmed.)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // keep reasonDraft in sync with the selected item
+  useEffect(() => {
+    const sel = data.find((d) => d.id === selectedId);
+    setReasonDraft(sel?.reason ?? "");
+  }, [selectedId, data]);
 
   const list = useMemo(() => {
     return data
@@ -140,26 +223,62 @@ export default function RequestManagement() {
     [data, selectedId]
   );
 
-  // ---- accept/deny wiring (NO UI CHANGES) ----
-  const setStatus = async (id: string, status: ReqStatus) => {
+  // ---- accept/deny wiring (NO layout changes) ----
+  const setStatus = async (id: string, status: ReqStatus, reason: string) => {
     const item = data.find((d) => d.id === id);
     if (!item) return;
 
-    // REQUIRE reason before calling backend (per spec)
-    const reason = (item.reason ?? "").trim();
-    if (!reason) {
-      message.error("Reason is required before approving/denying.");
+    const cleanReason = (reason ?? "").trim();
+    // Require reason for BOTH actions (Accept and Deny)
+    if (!cleanReason) {
+      message.error("Reason is required.");
       return;
     }
 
     try {
+      // capture who decided
+      const { data: auth } = await supabase.auth.getUser();
+      const decidedBy = auth?.user?.id ?? null;
+      const decidedAt = new Date().toISOString();
+
       if (status === "Accepted") {
+        // 1) mark the account request approved (only if still pending)
+        const { error: e1 } = await supabase
+          .from("account_requests")
+          .update({
+            status: "approved",
+            reason: cleanReason,
+            decided_by: decidedBy,
+            decided_at: decidedAt,
+          })
+          .eq("id", id)
+          .eq("status", "pending");
+        if (e1) throw e1;
+
+        // 2) promote profile role + status when we have a user id
         const finalRole: FinalRole =
           (item.extra?.role?.toLowerCase() as FinalRole) || "athlete";
-        await approveAccount({ id: item.id, finalRole, reason });
+        if (item.extra?.userId) {
+          const { error: e2 } = await supabase
+            .from("profiles")
+            .update({ role: finalRole, status: "active", is_active: true, updated_at: decidedAt })
+            .eq("id", item.extra.userId);
+          if (e2) throw e2;
+        }
       } else if (status === "Denied") {
-        await denyAccount({ id: item.id, reason });
+        const { error: e3 } = await supabase
+          .from("account_requests")
+          .update({
+            status: "denied",
+            reason: cleanReason,
+            decided_by: decidedBy,
+            decided_at: decidedAt,
+          })
+          .eq("id", id)
+          .eq("status", "pending");
+        if (e3) throw e3;
       }
+
       await refreshRequests();
 
       // optional: reset filter if item disappears from current view
@@ -314,11 +433,38 @@ export default function RequestManagement() {
                   />
                   <Labeled value={selected.status} label="Status" />
                   <Labeled value={selected.extra?.phone ?? "—"} label="Phone Number" />
+                  <Labeled
+                    value={
+                      selected.status === "Pending"
+                        ? "—"
+                        : selected.extra?.decidedByName || selected.extra?.decidedById || "—"
+                    }
+                    label="Decided By"
+                  />
+                  <Labeled
+                    value={
+                      selected.status === "Pending"
+                        ? "—"
+                        : selected.extra?.decidedAt
+                        ? dayjs(selected.extra.decidedAt).format("MMM D, YYYY • h:mm A")
+                        : "—"
+                    }
+                    label="Decided At"
+                  />
                 </div>
 
+                {/* Reason (editable) */}
                 <div>
                   <div className="text-sm text-gray-600 mb-1">Reason</div>
-                  <div className="rounded-xl border p-3 min-h-[120px]">{selected.reason ?? "—"}</div>
+                  <div className="rounded-xl border p-3 min-h-[120px]">
+                    <Input.TextArea
+                      rows={4}
+                      value={reasonDraft}
+                      onChange={(e) => setReasonDraft(e.target.value)}
+                      placeholder="Enter reason (required to accept/deny)"
+                      className="!resize-none"
+                    />
+                  </div>
                 </div>
 
                 <div className="flex flex-col sm:flex-row gap-3 justify-end">
@@ -327,7 +473,7 @@ export default function RequestManagement() {
                     icon={<CloseCircleOutlined style={{ color: "red" }} />}
                     okText="Yes"
                     cancelText="No"
-                    onConfirm={() => setStatus(selected.id, "Denied")}
+                    onConfirm={() => selected && setStatus(selected.id, "Denied", reasonDraft)}
                   >
                     <Button className="!h-10 !rounded-xl px-5">Deny Request</Button>
                   </Popconfirm>
@@ -337,7 +483,7 @@ export default function RequestManagement() {
                     icon={<CheckCircleOutlined style={{ color: "green" }} />}
                     okText="Yes"
                     cancelText="No"
-                    onConfirm={() => setStatus(selected.id, "Accepted")}
+                    onConfirm={() => selected && setStatus(selected.id, "Accepted", reasonDraft)}
                   >
                     <Button
                       type="primary"

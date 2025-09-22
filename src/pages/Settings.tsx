@@ -285,7 +285,14 @@ export default function Settings() {
           <Input.Password size="large" prefix={<LockOutlined />} />
         </Item>
 
-        <Item label="New Password" name="newPassword" rules={[{ required: true }]}>
+        <Item
+          label="New Password"
+          name="newPassword"
+          rules={[
+            { required: true },
+            { min: 12, message: "Password must be at least 12 characters" },
+          ]}
+        >
           <Input.Password size="large" prefix={<LockOutlined />} />
         </Item>
 
@@ -295,6 +302,7 @@ export default function Settings() {
           dependencies={["newPassword"]}
           rules={[
             { required: true },
+            { min: 12, message: "Password must be at least 12 characters" },
             ({ getFieldValue }) => ({
               validator(_, value) {
                 return !value || getFieldValue("newPassword") === value

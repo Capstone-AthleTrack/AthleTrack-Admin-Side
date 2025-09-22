@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react"; 
 import {
   Input,
   Select,
@@ -22,10 +22,7 @@ import clsx from "clsx";
 import NavBar from "@/components/NavBar";
 
 /* ---------- Supabase client (reads/writes public.profiles) ---------- */
-import { createClient } from "@supabase/supabase-js";
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+import { supabase } from "@/core/supabase";
 
 /* ---------------- types + constants ---------------- */
 type ReqStatus = "Pending" | "Accepted" | "Denied";

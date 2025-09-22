@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useState } from "react"; 
 import { Card, Form, Input, Button, Typography, Divider, message } from "antd";
 import { MailOutlined, LockOutlined } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import { BRAND } from "@/brand";
 
 /* shared supabase singleton */
-import { supabase } from "@/core/supabase";
+import supabase from "@/core/supabase";
 
 import {
   postSignUpBootstrap,
@@ -152,7 +152,7 @@ export default function SignIn() {
             className="w-2 h-2 rounded-full"
             style={{ background: BRAND.maroon }}
           />
-          <span
+        <span
             className="w-2 h-2 rounded-full"
             style={{ background: BRAND.yellow }}
           />
