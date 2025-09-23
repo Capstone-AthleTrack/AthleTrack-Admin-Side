@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";   
 import { Input, Select, Button, Empty, Avatar, Tag, message, Popconfirm } from "antd";
 import {
   UserOutlined,
@@ -97,7 +97,7 @@ export default function RequestManagement() {
   // tie the existing Reason field to state
   const [reasonDraft, setReasonDraft] = useState("");
 
-  // ---- load from backend (replaces old mock/services) ----
+  // ---- load from backend ----
   const refreshRequests = async () => {
     try {
       setLoading(true);
@@ -123,7 +123,7 @@ export default function RequestManagement() {
           ].join(",")
         )
         .order("created_at", { ascending: false })
-        .range(0, 199); // up to 200
+        .range(0, 199);
 
       if (error) throw error;
 
@@ -151,7 +151,6 @@ export default function RequestManagement() {
         }, {});
       }
 
-      // map backend rows → current UI shape (no JSX changes)
       const mapped: RequestItem[] = rows.map((r) => ({
         id: r.id,
         kind: "AthleteRequests",
@@ -177,7 +176,6 @@ export default function RequestManagement() {
 
       setData(mapped);
 
-      // keep selection stable if still present
       if (selectedId && !mapped.find((m) => m.id === selectedId)) {
         setSelectedId(null);
       }
@@ -194,10 +192,8 @@ export default function RequestManagement() {
 
   useEffect(() => {
     void refreshRequests();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  });
 
-  // keep reasonDraft in sync with the selected item
   useEffect(() => {
     const sel = data.find((d) => d.id === selectedId);
     setReasonDraft(sel?.reason ?? "");
@@ -217,32 +213,28 @@ export default function RequestManagement() {
       .sort((a, b) => dayjs(b.issuedAt).valueOf() - dayjs(a.issuedAt).valueOf());
   }, [data, filter, query]);
 
-  // FIX: always derive selected from raw data, not filtered list
   const selected = useMemo(
     () => data.find((d) => d.id === selectedId) ?? null,
     [data, selectedId]
   );
 
-  // ---- accept/deny wiring (NO layout changes) ----
+  // ---- accept/deny wiring ----
   const setStatus = async (id: string, status: ReqStatus, reason: string) => {
     const item = data.find((d) => d.id === id);
     if (!item) return;
 
     const cleanReason = (reason ?? "").trim();
-    // Require reason for BOTH actions (Accept and Deny)
     if (!cleanReason) {
       message.error("Reason is required.");
       return;
     }
 
     try {
-      // capture who decided
       const { data: auth } = await supabase.auth.getUser();
       const decidedBy = auth?.user?.id ?? null;
       const decidedAt = new Date().toISOString();
 
       if (status === "Accepted") {
-        // 1) mark the account request approved (only if still pending)
         const { error: e1 } = await supabase
           .from("account_requests")
           .update({
@@ -255,7 +247,6 @@ export default function RequestManagement() {
           .eq("status", "pending");
         if (e1) throw e1;
 
-        // 2) promote profile role + status when we have a user id
         const finalRole: FinalRole =
           (item.extra?.role?.toLowerCase() as FinalRole) || "athlete";
         if (item.extra?.userId) {
@@ -281,7 +272,6 @@ export default function RequestManagement() {
 
       await refreshRequests();
 
-      // optional: reset filter if item disappears from current view
       setFilter((curr) => (curr !== "All" && curr !== status ? "All" : curr));
 
       message.success(status === "Accepted" ? "Request accepted." : "Request denied.");
@@ -300,7 +290,10 @@ export default function RequestManagement() {
 
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-[420px_minmax(0,1fr)]">
         {/* LEFT */}
-        <aside className="border-r text-white" style={{ background: BRAND.maroon }}>
+        <aside
+          className="border-r text-white"
+          style={{ background: BRAND.maroon }}
+        >
           {/* search + filter */}
           <div className="px-4 pt-6 pb-3">
             <div className="flex items-center gap-2">
@@ -330,7 +323,7 @@ export default function RequestManagement() {
             List of Athlete Requests
           </div>
 
-          <div className="space-y-3 px-4 pb-6 overflow-y-auto max-h-[calc(100dvh-248px)]">
+          <div className="space-y-3 px-4 pb-6 overflow-y-auto overflow-x-hidden max-h-[calc(100dvh-248px)]">
             {list.length === 0 && (
               <div className="rounded-xl bg-white">
                 <Empty description="No records" image={Empty.PRESENTED_IMAGE_SIMPLE} className="py-10" />
@@ -347,20 +340,20 @@ export default function RequestManagement() {
                 )}
                 style={selectedId === item.id ? { boxShadow: `0 0 0 2px ${BRAND.maroon} inset` } : {}}
               >
-                <div className="flex items-center gap-3 text-left">
+                <div className="flex items-center gap-3 text-left min-w-0">
                   <Avatar icon={<UserOutlined />} />
-                  <div className="leading-tight">
-                    <div className="font-semibold text-gray-900">{item.name}</div>
-                    <div className="text-xs text-gray-500">
+                  <div className="leading-tight truncate">
+                    <div className="font-semibold text-gray-900 truncate">{item.name}</div>
+                    <div className="text-xs text-gray-500 truncate">
                       {item.email ?? "—"} · {item.deviceName ?? "—"}
                     </div>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 ml-2 shrink-0 items-center">
                   <Tag
                     bordered={false}
-                    className="!rounded-full"
+                    className="!rounded-full !m-0"
                     color={
                       item.status === "Pending"
                         ? "processing"
@@ -433,67 +426,72 @@ export default function RequestManagement() {
                   />
                   <Labeled value={selected.status} label="Status" />
                   <Labeled value={selected.extra?.phone ?? "—"} label="Phone Number" />
-                  <Labeled
-                    value={
-                      selected.status === "Pending"
-                        ? "—"
-                        : selected.extra?.decidedByName || selected.extra?.decidedById || "—"
-                    }
-                    label="Decided By"
-                  />
-                  <Labeled
-                    value={
-                      selected.status === "Pending"
-                        ? "—"
-                        : selected.extra?.decidedAt
-                        ? dayjs(selected.extra.decidedAt).format("MMM D, YYYY • h:mm A")
-                        : "—"
-                    }
-                    label="Decided At"
-                  />
+
+                  {/* Show only if not pending */}
+                  {selected.status !== "Pending" && (
+                    <>
+                      <Labeled
+                        value={selected.extra?.decidedByName || selected.extra?.decidedById || "—"}
+                        label="Decided By"
+                      />
+                      <Labeled
+                        value={
+                          selected.extra?.decidedAt
+                            ? dayjs(selected.extra.decidedAt).format("MMM D, YYYY • h:mm A")
+                            : "—"
+                        }
+                        label="Decided At"
+                      />
+                    </>
+                  )}
                 </div>
 
-                {/* Reason (editable) */}
+                {/* Reason */}
                 <div>
                   <div className="text-sm text-gray-600 mb-1">Reason</div>
-                  <div className="rounded-xl border p-3 min-h-[120px]">
+                  <div className="rounded-xl border p-3 min-h-[120px] bg-white">
                     <Input.TextArea
                       rows={4}
                       value={reasonDraft}
                       onChange={(e) => setReasonDraft(e.target.value)}
                       placeholder="Enter reason (required to accept/deny)"
-                      className="!resize-none"
+                      className="!resize-none !border-0 !shadow-none !bg-white"
+                      style={{ padding: 0 }}
+                      disabled={selected.status !== "Pending"}
                     />
                   </div>
                 </div>
 
-                <div className="flex flex-col sm:flex-row gap-3 justify-end">
-                  <Popconfirm
-                    title="Deny this request?"
-                    icon={<CloseCircleOutlined style={{ color: "red" }} />}
-                    okText="Yes"
-                    cancelText="No"
-                    onConfirm={() => selected && setStatus(selected.id, "Denied", reasonDraft)}
-                  >
-                    <Button className="!h-10 !rounded-xl px-5">Deny Request</Button>
-                  </Popconfirm>
-
-                  <Popconfirm
-                    title="Accept this request?"
-                    icon={<CheckCircleOutlined style={{ color: "green" }} />}
-                    okText="Yes"
-                    cancelText="No"
-                    onConfirm={() => selected && setStatus(selected.id, "Accepted", reasonDraft)}
-                  >
-                    <Button
-                      type="primary"
-                      className="!h-10 !rounded-xl px-5"
-                      style={{ background: BRAND.maroon, borderColor: BRAND.maroon }}
+                {/* Buttons only when Pending */}
+                {selected.status === "Pending" && (
+                  <div className="flex flex-col sm:flex-row gap-3 justify-end">
+                    <Popconfirm
+                      title="Deny this request?"
+                      icon={<CloseCircleOutlined style={{ color: "red" }} />}
+                      okText="Yes"
+                      cancelText="No"
+                      onConfirm={() => selected && setStatus(selected.id, "Denied", reasonDraft)}
                     >
-                      Accept Request
-                    </Button>
-                  </Popconfirm>
-                </div>
+                      <Button className="!h-10 !rounded-xl px-5">Deny Request</Button>
+                    </Popconfirm>
+
+                    <Popconfirm
+                      title="Accept this request?"
+                      icon={<CheckCircleOutlined style={{ color: "green" }} />}
+                      okText="Yes"
+                      cancelText="No"
+                      onConfirm={() => selected && setStatus(selected.id, "Accepted", reasonDraft)}
+                    >
+                      <Button
+                        type="primary"
+                        className="!h-10 !rounded-xl px-5"
+                        style={{ background: BRAND.maroon, borderColor: BRAND.maroon }}
+                      >
+                        Accept Request
+                      </Button>
+                    </Popconfirm>
+                  </div>
+                )}
               </div>
             )}
           </div>

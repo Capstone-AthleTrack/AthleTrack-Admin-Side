@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useEffect, useMemo, useState } from "react"; 
 import { useParams, useNavigate, Link } from "react-router-dom";
 import {
   BarChart,
@@ -16,17 +16,36 @@ import { ArrowLeftOutlined, LeftOutlined, RightOutlined, UserOutlined } from "@a
 import NavBar from "@/components/NavBar";
 import { BRAND } from "@/brand";
 
-// --- Helper: map display name 
+/* ── Live data helpers (Supabase views) ───────────────────────────────────── */
+import {
+  loadSportBundle,
+  type VCoach,
+  type VAthleteLite,
+  type ChartPrePostBar,
+  type ChartPerfLine,
+  shapePrePostBars,
+  shapePerfLines,
+  downloadCsv,
+} from "@/services/sports";
+
+/* ── Helper: map display name (legacy for local object keys) ─────────────── */
 const toSportKey = (name: string) =>
   name.replace(/\s+/g, "").replace(/-/g, "");
 
-// default placeholder 
+/* ── Slugify to match DB view `sport_slug` ───────────────────────────────── */
+const slugify = (s: string) =>
+  (s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+/* ── default placeholder  ────────────────────────────────────────────────── */
 const COACH_PLACEHOLDER = "/images/coach_photo.jpg";
 
-// --- Sports details object 
+/* ── Sports details object (kept as fallback; UI/styling unchanged) ──────── */
 const sportDetails = {
   Basketball: {
-    coaches: ["Head Coach", "Assistant Coach 1", "Assistant Coach 2"],
+    coaches: ["Coach", "Coach", "Coach"],
     athletes: ["Athlete 1", "Athlete 2", "Athlete 3", "Athlete 4", "Athlete 5", "Athlete 6"],
     chartData: [
       { name: "Athlete 1", preTest: 750, postTest: 900 },
@@ -44,7 +63,7 @@ const sportDetails = {
     ],
   },
   Baseball: {
-    coaches: ["Head Coach", "Assistant Coach 1", "Assistant Coach 2"],
+    coaches: ["Coach", "Coach", "Coach"],
     athletes: ["Athlete 1", "Athlete 2", "Athlete 3", "Athlete 4", "Athlete 5", "Athlete 6"],
     chartData: [
       { name: "Athlete 1", preTest: 750, postTest: 900 },
@@ -62,7 +81,7 @@ const sportDetails = {
     ],
   },
   Volleyball: {
-    coaches: ["Head Coach", "Assistant Coach 1", "Assistant Coach 2"],
+    coaches: ["Coach", "Coach", "Coach"],
     athletes: ["Athlete 1", "Athlete 2", "Athlete 3", "Athlete 4", "Athlete 5", "Athlete 6"],
     chartData: [
       { name: "Athlete 1", preTest: 750, postTest: 900 },
@@ -80,7 +99,7 @@ const sportDetails = {
     ],
   },
   BeachVolleyball: {
-    coaches: ["Head Coach", "Assistant Coach 1", "Assistant Coach 2"],
+    coaches: ["Coach", "Coach", "Coach"],
     athletes: ["Athlete 1", "Athlete 2", "Athlete 3", "Athlete 4", "Athlete 5", "Athlete 6"],
     chartData: [
       { name: "Athlete 1", preTest: 750, postTest: 900 },
@@ -98,7 +117,7 @@ const sportDetails = {
     ],
   },
   Football: {
-    coaches: ["Head Coach", "Assistant Coach 1", "Assistant Coach 2"],
+    coaches: ["Coach", "Coach", "Coach"],
     athletes: ["Athlete 1", "Athlete 2", "Athlete 3", "Athlete 4", "Athlete 5", "Athlete 6"],
     chartData: [
       { name: "Athlete 1", preTest: 750, postTest: 900 },
@@ -116,7 +135,7 @@ const sportDetails = {
     ],
   },
   Softball: {
-    coaches: ["Head Coach", "Assistant Coach 1", "Assistant Coach 2"],
+    coaches: ["Coach", "Coach", "Coach"],
     athletes: ["Athlete 1", "Athlete 2", "Athlete 3", "Athlete 4", "Athlete 5", "Athlete 6"],
     chartData: [
       { name: "Athlete 1", preTest: 750, postTest: 900 },
@@ -134,7 +153,7 @@ const sportDetails = {
     ],
   },
   Futsal: {
-    coaches: ["Head Coach", "Assistant Coach 1", "Assistant Coach 2"],
+    coaches: ["Coach", "Coach", "Coach"],
     athletes: ["Athlete 1", "Athlete 2", "Athlete 3", "Athlete 4", "Athlete 5", "Athlete 6"],
     chartData: [
       { name: "Athlete 1", preTest: 750, postTest: 900 },
@@ -152,7 +171,7 @@ const sportDetails = {
     ],
   },
   SepakTakraw: {
-    coaches: ["Head Coach", "Assistant Coach 1", "Assistant Coach 2"],
+    coaches: ["Coach", "Coach", "Coach"],
     athletes: ["Athlete 1", "Athlete 2", "Athlete 3", "Athlete 4", "Athlete 5", "Athlete 6"],
     chartData: [
       { name: "Athlete 1", preTest: 750, postTest: 900 },
@@ -171,19 +190,94 @@ const sportDetails = {
   },
 } as const;
 
+type CoachItem = string | { name: string; image?: string };
+
 export default function SportDetail() {
   const { sportName = "" } = useParams<{ sportName?: string }>();
   const navigate = useNavigate();
 
-  // Convert display name from URL to object key
+  /* Convert display name from URL to object key (for fallback) */
   const key = toSportKey(sportName);
   const sport = sportDetails[key as keyof typeof sportDetails];
 
-  // coaches scroller ref
+  /* coaches scroller ref */
   const coachesScrollRef = useRef<HTMLDivElement>(null);
   const scrollRight = () => coachesScrollRef.current?.scrollBy({ left: 220, behavior: "smooth" });
 
-  if (!sport) {
+  /* ── Live data state ───────────────────────────────────────────────────── */
+  const [coaches, setCoaches] = useState<VCoach[]>([]);
+  const [athletes, setAthletes] = useState<VAthleteLite[]>([]);
+  const [prepost, setPrepost] = useState<ChartPrePostBar[]>([]);
+  const [performance, setPerformance] = useState<ChartPerfLine[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+
+  /* Fetch live bundle for this sport */
+  useEffect(() => {
+    let alive = true;
+    const slug = slugify(sportName);
+
+    (async () => {
+      try {
+        setLoading(true);
+        const bundle = await loadSportBundle(slug);
+        if (!alive) return;
+
+        setCoaches(bundle.coaches);
+        setAthletes(bundle.athletes);
+        setPrepost(shapePrePostBars(bundle.prepost, bundle.athletes));
+        setPerformance(shapePerfLines(bundle.performance));
+      } catch {
+        // fall back to static if live fetch fails
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [sportName]);
+
+  /* Recharts adapters (keep your original data keys/UI) */
+  const prepostDisplay = useMemo(() => {
+    const base = prepost.length
+      ? prepost.map((p) => ({ name: p.label, preTest: p.preTest, postTest: p.postTest }))
+      : [...(sport?.chartData ?? [])];
+    return base;
+  }, [prepost, sport]);
+
+  // Your existing legend expects agility/strength/power/flexibility/reactionTime/coordination.
+  // Live DB provides agility/power/strength (+ optional stamina/average). Keep others as 0 to preserve UI.
+  const performanceDisplay = useMemo(() => {
+    if (performance.length) {
+      return performance.map((r) => ({
+        name: r.week,
+        agility: r.agility,
+        strength: r.strength,
+        power: r.power,
+        flexibility: 0,
+        reactionTime: 0,
+        coordination: 0,
+      }));
+    }
+    return [...(sport?.performanceData ?? [])];
+  }, [performance, sport]);
+
+  /* Fallback lists to preserve UI if live arrays are empty */
+  const coachesToRender = useMemo<CoachItem[]>(() => {
+    if (coaches.length) {
+      return coaches.map((c) => ({ name: c.full_name || "Coach", image: COACH_PLACEHOLDER }));
+    }
+    const raw = Array.from((sport?.coaches ?? []) as ReadonlyArray<CoachItem>);
+    return raw.map((x) => (typeof x === "string" ? { name: x } : x));
+  }, [coaches, sport]);
+
+  const athletesToRender = useMemo(() => {
+    if (athletes.length) return athletes.map((a) => a.full_name || "Athlete");
+    return sport?.athletes ?? [];
+  }, [athletes, sport]);
+
+  if (!sport && !prepost.length && !performance.length && !coaches.length && !athletes.length && !loading) {
     return (
       <div className="min-h-screen bg-white">
         <NavBar />
@@ -244,13 +338,8 @@ export default function SportDetail() {
               className="flex gap-4 overflow-x-auto pr-10 pb-1"
               style={{ scrollbarWidth: "none" } as React.CSSProperties}
             >
-              {(
-                // normalize: accept ["Head Coach", ...] OR [{name, image}, ...]
-                (sport.coaches as unknown as Array<string | { name: string; image?: string }>)
-              ).map((c, idx) => {
-                const coach =
-                  typeof c === "string" ? { name: c, image: COACH_PLACEHOLDER } : c;
-
+              {coachesToRender.map((c, idx) => {
+                const coach = typeof c === "string" ? { name: c, image: COACH_PLACEHOLDER } : { name: c.name, image: c.image || COACH_PLACEHOLDER };
                 return (
                   <div
                     key={idx}
@@ -303,11 +392,11 @@ export default function SportDetail() {
             List of Athletes
           </h3>
           <div className="space-y-3">
-            {sport.athletes.map((athlete, idx) => (
+            {athletesToRender.map((athlete, idx) => (
               <button
                 key={idx}
                 onClick={() =>
-                  navigate(`/sports/${encodeURIComponent(sportName)}/athletes/${encodeURIComponent(athlete)}`)
+                  navigate(`/sports/${encodeURIComponent(sportName)}/athletes/${encodeURIComponent(typeof athlete === "string" ? athlete : String(athlete))}`)
                 }
                 className="w-full text-left flex justify-between items-center rounded-xl py-3 px-4 shadow cursor-pointer transition hover:scale-[1.02] bg-white text-gray-900"
               >
@@ -318,7 +407,7 @@ export default function SportDetail() {
                   >
                     <UserOutlined />
                   </span>
-                  <span>{athlete}</span>
+                  <span>{typeof athlete === "string" ? athlete : String(athlete)}</span>
                 </div>
                 <span className="font-bold" style={{ color: BRAND.maroon }}>
                   &gt;
@@ -349,13 +438,14 @@ export default function SportDetail() {
                 onMouseLeave={(e) => {
                   e.currentTarget.style.borderColor = "#D1D5DB";
                 }}
+                onClick={() => downloadCsv("prepost_overview.csv", prepost)}
               >
                 Export CSV
               </button>
             </div>
 
             <ResponsiveContainer width="100%" height={400}>
-              <BarChart data={[...sport.chartData]}>
+              <BarChart data={prepostDisplay}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="name" />
                 <YAxis />
@@ -386,13 +476,14 @@ export default function SportDetail() {
                 onMouseLeave={(e) => {
                   e.currentTarget.style.borderColor = "#D1D5DB";
                 }}
+                onClick={() => downloadCsv("performance_overview.csv", performance)}
               >
                 Export CSV
               </button>
             </div>
 
             <ResponsiveContainer width="100%" height={400}>
-              <LineChart data={[...sport.performanceData]}>
+              <LineChart data={performanceDisplay}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="name" />
                 <YAxis />
