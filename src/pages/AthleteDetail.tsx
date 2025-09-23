@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react"; 
 import { useNavigate, useParams } from "react-router-dom";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, Legend, CartesianGrid, ResponsiveContainer,
@@ -6,7 +6,15 @@ import {
 import { ArrowLeftOutlined } from "@ant-design/icons";
 import NavBar from "@/components/NavBar";
 import { BRAND } from "@/brand";
-import sportDetails from "./SportsDetail";
+import {
+  loadAthleteBundle,
+  type ProfileLite,
+  type ChartAthletePrePost,
+  type ChartAthletePerf,
+  shapeAthletePrePost,
+  shapeAthletePerf,
+} from "@/services/sports";
+import supabase from "@/core/supabase";
 
 const months = ["JAN","FEB","MAR","APR","MAY","JUNE","JULY","AUG","SEP","OCT","NOV","DEC"];
 
@@ -30,28 +38,93 @@ export default function AthleteDetail() {
   const navigate = useNavigate();
   const { sportName = "", athleteName = "" } = useParams<{ sportName?: string; athleteName?: string }>();
 
-  // sample data per athlete (months)
+  // ── Live data state
+  const [profile, setProfile] = useState<ProfileLite | null>(null);
+  const [prepostRows, setPrepostRows] = useState<ChartAthletePrePost[]>([]);
+  const [perfRows, setPerfRows] = useState<ChartAthletePerf[]>([]);
+
+  // Resolve athlete by name, then load bundle by user_id
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const resolved = await supabase
+          .from("v_profile_lite")
+          .select("*")
+          .ilike("full_name", athleteName)
+          .limit(1)
+          .returns<ProfileLite[]>();
+
+        const row = resolved.data?.[0] ?? null;
+        if (!row) return;
+
+        if (!alive) return;
+        setProfile(row);
+
+        const bundle = await loadAthleteBundle(row.user_id);
+        if (!alive) return;
+
+        setProfile(bundle.profile ?? row);
+        setPrepostRows(shapeAthletePrePost(bundle.prepost));
+        setPerfRows(shapeAthletePerf(bundle.performance));
+      } catch {
+        // keep placeholders if lookup fails
+      }
+    })();
+    return () => { alive = false; };
+  }, [athleteName]);
+
+  // sample data per athlete (months) — fallback if live data empty
   const prePostData = useMemo(
     () =>
-      months.slice(0, 9).map((m, i) => ({
-        month: m,
-        pre: [750,520,830,510,600,250,300,800,420][i] ?? 500,
-        post: [900,610,880,1000,650,450,560,920,480][i] ?? 600,
-      })),
-    []
+      (prepostRows.length
+        ? prepostRows.map((r, i) => ({
+            month: String(r.label ?? i + 1),
+            pre: r.preTest ?? 0,
+            post: r.postTest ?? 0,
+          }))
+        : months.slice(0, 9).map((m, i) => ({
+            month: m,
+            pre: [750,520,830,510,600,250,300,800,420][i] ?? 500,
+            post: [900,610,880,1000,650,450,560,920,480][i] ?? 600,
+          }))),
+    [prepostRows]
   );
 
   const performanceData = useMemo(
     () =>
-      months.slice(0, 9).map((m, i) => ({
-        month: m,
-        score: [1000,200,560,260,410,970,260,990,450][i] ?? 300,
-      })),
-    []
+      (perfRows.length
+        ? perfRows.map((r) => {
+            let label = r.day;
+            try {
+              const d = new Date(r.day);
+              const mm = months[d.getMonth()] ?? r.day;
+              label = mm;
+            } catch {
+              // keep ISO if parsing fails
+            }
+            return {
+              month: label,
+              agility: r.agility ?? 0,
+              strength: r.strength ?? 0,
+              power: r.power ?? 0,
+              flexibility: 0,
+              reactionTime: 0,
+              coordination: 0,
+            };
+          })
+        : months.slice(0, 9).map((m, i) => ({
+            month: m,
+            agility: [500,600,700,800,650,720,660,705,690][i] ?? 500,
+            strength: [400,500,600,700,580,640,590,630,610][i] ?? 400,
+            power: [350,420,480,550,500,520,510,530,515][i] ?? 350,
+            flexibility: [300,360,400,450,380,390,395,405,410][i] ?? 300,
+            reactionTime: [450,500,550,600,520,530,540,560,570][i] ?? 450,
+            coordination: [380,420,460,500,430,440,450,470,480][i] ?? 380,
+          }))),
+    [perfRows]
   );
 
-  const key = sportName.replace(/\s+/g, "").replace(/-/g, "");
-  const sport = sportDetails[key as keyof typeof sportDetails];
   const [showConfirm, setShowConfirm] = useState(false);
   async function handleConfirmDelete() {
   // TODO: call your API to delete the athlete here
@@ -101,37 +174,37 @@ export default function AthleteDetail() {
             </div>
             <h2 className="text-xl font-semibold">{athleteName}</h2>
             <p className="text-sm opacity-80">PUP ID Number</p>
-            <p className="text-sm opacity-80 mb-6">{sport ? Object.keys(sportDetails).find(k => k === key) : ""}</p>
+            <p className="text-sm opacity-80 mb-6">{profile?.pup_id ?? ""}</p>
           </div>
 
             {/* Form card – view-only */}
             <div className="space-y-4">
 
               <div className="w-full rounded-md bg-white px-4 py-2 text-gray-900">
-                {athleteName}
+                {profile?.full_name ?? athleteName}
                 {/* <input type="hidden" name="name" value={athleteName} /> */}
               </div>
 
               <div className="w-full rounded-md bg-white px-4 py-2 text-gray-900">
-                athlete@email.com
+                {profile?.pup_webmail ?? "athlete@email.com"}
                 {/* <input type="hidden" name="email" value="athlete@email.com" /> */}
               </div>
 
               <div className="flex items-center gap-2">
                 <span className="px-3 py-2 rounded-md bg-white text-gray-900">+63</span>
                 <div className="flex-1 rounded-md bg-white px-4 py-2 text-gray-900">
-                  9123456789
+                  {(profile?.phone ?? "9123456789").replace(/^\+?63/, "").replace(/^0/, "")}
                   {/* <input type="hidden" name="phone" value="9123456789" /> */}
                 </div>
               </div>
 
               <div className="w-full rounded-md bg-white px-4 py-2 text-gray-900">
-                Athlete
+                {profile?.role ?? "Athlete"}
                 {/* <input type="hidden" name="role" value="Athlete" /> */}
               </div>
 
               <div className="w-full rounded-md bg-white px-4 py-2 text-gray-900">
-                2024-08-20
+                {profile?.birthdate ?? "2024-08-20"}
                 {/* <input type="hidden" name="registered_at" value="2024-08-20" /> */}
               </div>
 

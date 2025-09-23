@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"; 
+import { useEffect, useMemo, useState } from "react";  
 import {
   Input,
   Select,
@@ -362,23 +362,23 @@ export default function UserManagement() {
                     : {}
                 }
               >
-                <div className="flex items-center gap-3 text-left">
+                <div className="flex items-center gap-3 text-left min-w-0">
                   <Avatar icon={<UserOutlined />} />
-                  <div className="leading-tight">
-                    <div className="font-semibold text-gray-900">
+                  <div className="leading-tight truncate max-w-[220px]">
+                    <div className="font-semibold text-gray-900 truncate">
                       {item.name}
                     </div>
-                    <div className="text-xs text-gray-500">
+                    <div className="text-xs text-gray-500 truncate">
                       {item.email ?? "—"} · {item.deviceName ?? "—"}
                     </div>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 shrink-0">
                   <span className="text-[11px] text-gray-400 whitespace-nowrap">
                     {dayjs(item.issuedAt).fromNow()}
                   </span>
-                  <RightOutlined className="text-gray-300" />
+                  <RightOutlined className="text-gray-400" />
                 </div>
               </button>
             ))}
