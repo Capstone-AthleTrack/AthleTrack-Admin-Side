@@ -1,6 +1,6 @@
 // src/services/profile.ts
 import type { PostgrestError } from '@supabase/supabase-js';
-import { supabase } from '@/core/supabase';
+import supabase from '@/core/supabase';
 
 export type MyProfile = {
   full_name: string;

@@ -1,123 +1,143 @@
 // src/services/admin-approval.ts
-/* Admin approval glue — NO UI CHANGES */
-import { supabase } from "@/core/supabase";
+import type { PostgrestError } from "@supabase/supabase-js";
+import supabase from "@/core/supabase";
 
-/* ----------------------------- types ----------------------------- */
-export type AdminRequestRow = {
-  id: string;
-  user_id: string;
-  source: string | null;
-  invite_token: string | null;
-  status: "pending" | "approved" | "rejected";
-  reason: string | null;
-  decided_by: string | null;
-  created_at: string;
-  decided_at: string | null;
+/* ---------------- util ---------------- */
+function asError(e: unknown): Error {
+  if (e instanceof Error) return e;
+  const pe = e as Partial<PostgrestError> & { message?: string };
+  return new Error(pe?.message || "Unknown error");
+}
+
+/* ---------------- types ---------------- */
+type Role = "admin" | "coach" | "athlete" | "user" | null;
+type Status = "pending" | "active" | "suspended" | "disabled" | null;
+
+export type LiteProfile = {
+  role: Role;
+  status?: Status;
+  is_active?: boolean | null; // legacy compat
 };
 
-export type ProfileRow = {
-  id: string;
-  email: string | null;
-  role: "admin" | "coach" | "athlete";
-  status: "pending" | "active" | "suspended" | "disabled";
-};
+/* -------------------------------------------------------------------------- */
+/*  Ensure/refresh a profile row AFTER email has been verified.               */
+/*  Replaces RPCs: ensure_profile_if_confirmed, bootstrap_profile             */
+/* -------------------------------------------------------------------------- */
+export async function postSignUpBootstrap(opts?: {
+  fullName?: string | null;
+  pupId?: string | null;
+}) {
+  const { data: au } = await supabase.auth.getUser();
+  const user = au?.user;
+  if (!user) throw new Error("Not signed in");
 
-/* -------------------------- edge helper -------------------------- */
-async function callEdge<T = unknown>(name: string, init?: RequestInit): Promise<T> {
-  const { data: sessionData, error: sessErr } = await supabase.auth.getSession();
-  if (sessErr) throw sessErr;
-  const session = sessionData.session;
-  if (!session) throw new Error("Not authenticated");
+  // Only proceed once the email is confirmed (same behavior as old RPC)
+  const isConfirmed = !!user.email_confirmed_at;
+  if (!isConfirmed) return;
 
-  const headers = new Headers(init?.headers);
-  headers.set("Authorization", `Bearer ${session.access_token}`);
-  if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  // Minimal upsert to profiles (self row). Idempotent.
+  const payload: Record<string, unknown> = {
+    id: user.id,
+    // Don't force role/status here; admin approval flow will set those.
+    updated_at: new Date().toISOString(),
+  };
 
-  const base = import.meta.env.VITE_SUPABASE_URL as string;
-  const res = await fetch(`${base}/functions/v1/${name}`, {
-    ...init,
-    headers,
-  });
-  if (!res.ok) throw new Error(await res.text());
+  const fullName = (opts?.fullName ?? user.user_metadata?.full_name ?? "").trim();
+  if (fullName) payload["full_name"] = fullName;
 
-  try {
-    return (await res.json()) as T;
-  } catch {
-    return {} as T;
+  const pupId = (opts?.pupId ?? "").trim();
+  if (pupId) payload["pup_id"] = pupId;
+
+  // Try upsert. If some optional columns don't exist in your schema,
+  // PostgREST will error — catch and retry with only required columns.
+  let upsertErr: PostgrestError | null = null;
+
+  {
+    const { error } = await supabase.from("profiles").upsert(payload, { onConflict: "id" });
+    upsertErr = error as PostgrestError | null;
+  }
+
+  // If a column is missing (42703), retry with just id/updated_at/full_name
+  if (upsertErr?.code === "42703") {
+    const slim: Record<string, unknown> = {
+      id: user.id,
+      updated_at: new Date().toISOString(),
+    };
+    if (fullName) slim["full_name"] = fullName;
+
+    const { error } = await supabase.from("profiles").upsert(slim, { onConflict: "id" });
+    if (error) throw asError(error);
+  } else if (upsertErr) {
+    throw asError(upsertErr);
   }
 }
 
-/* --------------------------- public API -------------------------- */
-export async function postSignUpBootstrap() {
-  const invite = new URLSearchParams(window.location.search).get("invite");
-  const path = invite ? `claim_admin?invite=${encodeURIComponent(invite)}` : "claim_admin";
-  return callEdge(path, { method: "POST" });
-}
+/* -------------------------------------------------------------------------- */
+/*  File a pending admin-role request (idempotent).                           */
+/*  Replaces RPC: request_admin_role                                          */
+/* -------------------------------------------------------------------------- */
+export async function submitAdminRequest(reason?: string | null) {
+  const { data: au } = await supabase.auth.getUser();
+  const user = au?.user;
+  if (!user) throw new Error("Not signed in");
 
-export async function submitAdminRequest() {
-  return callEdge("request_admin_role", { method: "POST" });
-}
+  // De-dupe: if the latest request is still pending, do nothing.
+  const { data: existing, error: qErr } = await supabase
+    .from("account_requests")
+    .select("id,status")
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
-export async function issueAdminInvite(expiresInDays = 7) {
-  return callEdge("issue_admin_invite", {
-    method: "POST",
-    body: JSON.stringify({ expiresInDays }),
+  if (qErr) throw asError(qErr);
+  if (existing && existing.status === "pending") return true;
+
+  const { error } = await supabase.from("account_requests").insert({
+    user_id: user.id,
+    email: user.email ?? null,
+    full_name: (user.user_metadata?.full_name ?? "").trim() || null,
+    desired_role: "admin",
+    device_name: (typeof navigator !== "undefined" ? navigator.userAgent : "web").slice(0, 128),
+    status: "pending",
+    reason: reason ?? null,
   });
+
+  if (error) throw asError(error);
+  return true;
 }
 
-export async function approveAdmin(userId: string, requestId?: string) {
-  return callEdge("approve_admin", {
-    method: "POST",
-    body: JSON.stringify({ user_id: userId, request_id: requestId }),
-  });
-}
-
-export async function rejectAdmin(requestId: string, reason?: string) {
-  return callEdge("reject_admin", {
-    method: "POST",
-    body: JSON.stringify({ request_id: requestId, reason }),
-  });
-}
-
-export async function listAdminRequests(): Promise<AdminRequestRow[]> {
-  const { data: userData, error: userErr } = await supabase.auth.getUser();
-  if (userErr) throw userErr;
-  const user = userData.user;
-  if (!user) throw new Error("Not authenticated");
-
-  const adminQuery = await supabase
-    .from("admin_role_requests")
-    .select("id,user_id,source,invite_token,status,reason,decided_by,created_at,decided_at")
-    .eq("status", "pending")
-    .order("created_at", { ascending: true })
-    .returns<AdminRequestRow[]>();
-
-  if (adminQuery.error) {
-    const ownQuery = await supabase
-      .from("admin_role_requests")
-      .select("id,user_id,source,invite_token,status,reason,decided_by,created_at,decided_at")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false })
-      .returns<AdminRequestRow[]>();
-    return ownQuery.data ?? [];
-  }
-
-  return adminQuery.data ?? [];
-}
-
-export async function getMyProfile(): Promise<ProfileRow | null> {
-  const { data: userData, error: userErr } = await supabase.auth.getUser();
-  if (userErr) throw userErr;
-  const user = userData.user;
-  if (!user) return null;
+/* -------------------------------------------------------------------------- */
+/*  Compact profile for gating (role + status).                               */
+/*  Replaces RPC: get_my_profile_lite                                         */
+/* -------------------------------------------------------------------------- */
+export async function getMyProfile(): Promise<LiteProfile | null> {
+  const { data: au } = await supabase.auth.getUser();
+  const user = au?.user;
+  if (!user) throw new Error("Not signed in");
 
   const { data, error } = await supabase
     .from("profiles")
-    .select("id,email,role,status")
+    .select("role,status,is_active")
     .eq("id", user.id)
-    .maybeSingle()
-    .returns<ProfileRow>();
-  if (error) throw error;
+    .limit(1)
+    .maybeSingle();
 
-  return data ?? null;
+  if (error) throw asError(error);
+  if (!data) return null;
+  return data as LiteProfile;
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Boolean check for admin                                                   */
+/*  Replaces RPC: is_admin                                                    */
+/* -------------------------------------------------------------------------- */
+export async function isAdmin(): Promise<boolean> {
+  const prof = await getMyProfile();
+  if (!prof) return false;
+
+  const role = (prof.role ?? "user") as Role;
+  const status = (prof.status ?? ((prof.is_active ? "active" : "pending") as Status)) as Status;
+
+  return role === "admin" && status === "active";
 }

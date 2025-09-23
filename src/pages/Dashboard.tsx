@@ -1,4 +1,4 @@
-import { Card, Button, Tabs } from "antd";
+import { Card, Button, Tabs } from "antd"; 
 import type { TabsProps } from "antd";
 import {
   ResponsiveContainer,
@@ -11,6 +11,8 @@ import {
 } from "recharts";
 import Navbar from "@/components/NavBar";
 import { BRAND } from "@/brand";
+import { useEffect, useMemo, useState } from "react";
+import supabase from "@/core/supabase";
 
 type UsagePoint = { time: string; active: number; visits: number };
 const usageData: UsagePoint[] = [
@@ -39,6 +41,60 @@ const loginFreq: LoginPoint[] = [
   { date: "JUNE 22", coaches: 12, athletes: 90 },
 ];
 
+/* ---- DB row types (views) ---- */
+type SummaryRow = {
+  total_users: number;
+  app_visits: number;
+  new_users: number;
+  active_users: number;
+};
+type ActivityRow = {
+  bucket: string;                 // timestamptz
+  session_starts?: number | null; // plural (current)
+  session_start?: number | null;  // singular (fallback)
+  active_users: number | null;
+};
+type LoginRow = {
+  day: string;        // date/timestamptz
+  athletes: number;
+  coaches: number;
+};
+
+/* ---- small helpers ---- */
+function fmt(n: number | undefined | null) {
+  if (typeof n !== "number") return "0";
+  try {
+    return n.toLocaleString();
+  } catch {
+    return String(n);
+  }
+}
+function fmtHourLabel(ts: string) {
+  const d = new Date(ts);
+  return d.toLocaleString("en-US", { hour: "numeric", hour12: true });
+}
+function fmtDayLabel(ts: string) {
+  const d = new Date(ts);
+  const label = d.toLocaleString("en-US", { month: "long", day: "2-digit" });
+  return label.toUpperCase();
+}
+function downloadCsv<T extends Record<string, unknown>>(filename: string, rows: T[]) {
+  if (!rows || !rows.length) return;
+  const first = rows[0] as Record<string, unknown>;
+  const headers = Object.keys(first);
+  const csv = [
+    headers.join(","),
+    ...rows.map((row) => {
+      const r = row as Record<string, unknown>;
+      return headers.map((h) => JSON.stringify(r[h] ?? "")).join(",");
+    }),
+  ].join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
 
 export default function Dashboard() {
   const tabItems: TabsProps["items"] = [
@@ -46,6 +102,57 @@ export default function Dashboard() {
     { key: "Weekly", label: <span className="text-base">Weekly</span> },
     { key: "Monthly", label: <span className="text-base">Monthly</span> },
   ];
+
+  // ---- live data state (UI preserved) ----
+  const [kpi, setKpi] = useState<SummaryRow | null>(null);
+  const [usageSeries, setUsageSeries] = useState<UsagePoint[]>(usageData);
+  const [loginSeries, setLoginSeries] = useState<LoginPoint[]>(loginFreq);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        setLoading(true);
+        const [s, a, l] = await Promise.all([
+          supabase.from("v_dash_summary_today").select("*").single(),
+          supabase.from("v_daily_activity_24h").select("*").order("bucket", { ascending: true }),
+          supabase.from("v_login_frequency_7d").select("*").order("day", { ascending: true }),
+        ]);
+
+        if (!s.error && s.data && alive) {
+          setKpi(s.data as SummaryRow);
+        }
+        if (!a.error && Array.isArray(a.data) && alive) {
+          const mapped: UsagePoint[] = (a.data as ActivityRow[]).map((r) => ({
+            time: fmtHourLabel(r.bucket),
+            active: Number(r.active_users ?? 0),
+            visits: Number((r.session_starts ?? r.session_start ?? 0) as number),
+          }));
+          setUsageSeries(mapped);
+        }
+        if (!l.error && Array.isArray(l.data) && alive) {
+          const mapped: LoginPoint[] = (l.data as LoginRow[]).map((r) => ({
+            date: fmtDayLabel(r.day),
+            coaches: Number(r.coaches ?? 0),
+            athletes: Number(r.athletes ?? 0),
+          }));
+          setLoginSeries(mapped);
+        }
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const exportUsageCsv = () => downloadCsv("activity_24h.csv", usageSeries);
+  const exportLoginCsv =  () => downloadCsv("login_frequency_7d.csv", loginSeries);
+
+  const totalUsers = useMemo(() => fmt(kpi?.total_users), [kpi]);
+  const appVisits  = useMemo(() => fmt(kpi?.app_visits),  [kpi]);
+  const newUsers   = useMemo(() => fmt(kpi?.new_users),   [kpi]);
+  const activeUsers= useMemo(() => fmt(kpi?.active_users),[kpi]);
 
   return (
     <div
@@ -69,22 +176,22 @@ export default function Dashboard() {
               extra={
                 <div className="flex items-center gap-8">
                   <Tabs size="small" defaultActiveKey="Daily" items={tabItems} />
-                  <Button size="large" className="!px-5 !h-8 text-base">
+                  <Button size="large" className="!px-5 !h-8 text-base" onClick={exportUsageCsv} disabled={loading}>
                     Export CSV
                   </Button>
                 </div>
               }
             >
               <div className="grid grid-cols-4 gap-6 mb-6">
-                <KPI label="Total Users" value="160" delta="+0.09%" />
-                <KPI label="App Visits" value="1,154" delta="+0.07%" />
-                <KPI label="New Users" value="56" delta="+0.05%" />
-                <KPI label="Active Users" value="17" delta="+0.03%" />
+                <KPI label="Total Users" value={totalUsers} delta="+0.09%" />
+                <KPI label="App Visits" value={appVisits} delta="+0.07%" />
+                <KPI label="New Users" value={newUsers} delta="+0.05%" />
+                <KPI label="Active Users" value={activeUsers} delta="+0.03%" />
               </div>
 
               <div className="h-[28rem]">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={usageData}>
+                  <LineChart data={usageSeries}>
                     <XAxis dataKey="time" tick={{ fontSize: 12 }} />
                     <YAxis tick={{ fontSize: 12 }} />
                     <Tooltip />
@@ -115,14 +222,14 @@ export default function Dashboard() {
               className="rounded-2xl shadow-lg"
               bodyStyle={{ padding: 24 }}
               extra={
-                <Button size="large" className="!px-5 !h-8 text-base">
+                <Button size="large" className="!px-5 !h-8 text-base" onClick={exportLoginCsv} disabled={loading}>
                   Export CSV
                 </Button>
               }
             >
               <div className="h-[35rem]">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={loginFreq}>
+                  <LineChart data={loginSeries}>
                     <XAxis dataKey="date" tick={{ fontSize: 14 }} />
                     <YAxis tick={{ fontSize: 14 }} />
                     <Tooltip />
