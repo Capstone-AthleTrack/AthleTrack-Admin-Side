@@ -36,6 +36,41 @@ export default function SignIn() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
 
+  // ---- Minimal telemetry helpers (no UI changes) ----
+  async function recordLoginEvent() {
+    try {
+      const { data: userRes } = await supabase.auth.getUser();
+      const u = userRes.user;
+      if (!u) return;
+      await supabase.from("auth_events").insert({
+        user_id: u.id,
+        event: "login",
+        device: "web",
+        platform: "react",
+        provider: "password",
+      });
+    } catch (e) {
+      // RLS or table mismatch? Ignore silently.
+      console.debug("auth_events insert skipped:", e);
+    }
+  }
+
+  async function startAppSession(page: string = "/dashboard") {
+    try {
+      const { data: userRes } = await supabase.auth.getUser();
+      const u = userRes.user;
+      await supabase.from("app_sessions").insert({
+        user_id: u?.id ?? null,
+        device: "web",
+        platform: "react",
+        page,
+      });
+    } catch (e) {
+      console.debug("app_sessions insert skipped:", e);
+    }
+  }
+  // ---------------------------------------------------
+
   async function handleSignIn(values: SignInFormValues) {
     setLoading(true);
     try {
@@ -61,6 +96,9 @@ export default function SignIn() {
         message.error("PUP webmail only: @iskolarngbayan.pup.edu.ph");
         return;
       }
+
+      // 2.5) Record a login event (safe no-op if RLS not ready)
+      await recordLoginEvent();
 
       // 3) Bootstrap claim (zero-admin or invite flow); ignore if not applicable
       try {
@@ -89,7 +127,8 @@ export default function SignIn() {
         return;
       }
 
-      // 5) Admin & active → proceed
+      // 5) Admin & active → record a session start then proceed
+      await startAppSession("/dashboard");
       navigate("/dashboard");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

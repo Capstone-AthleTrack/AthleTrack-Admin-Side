@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ReactElement } from "react";
+import { recordSessionStart } from "@/utils/telemetry";
 import { Routes, Route, Navigate } from "react-router-dom";
 
 /* ── Public pages ── */
@@ -17,7 +18,7 @@ import RequestManagement from "./pages/RequestManagement";
 import Settings from "./pages/Settings";
 
 /* ── shared supabase singleton ── */
-import { supabase } from "@/core/supabase";
+import supabase from "@/core/supabase";
 
 const isPupMail = (email?: string | null) =>
   !!email && email.toLowerCase().endsWith("@iskolarngbayan.pup.edu.ph");
@@ -76,6 +77,18 @@ function RequireAdminActive({ children }: { children: ReactElement }): ReactElem
 }
 
 export default function App() {
+  // Once-per-tab session ping (deduped via sessionStorage to play nice with React 18 StrictMode)
+  useEffect(() => {
+    const KEY = "app-session-started";
+    try {
+      if (typeof window !== "undefined" && sessionStorage.getItem(KEY)) return;
+      sessionStorage.setItem(KEY, "1");
+    } catch {
+      // ignore storage errors (private mode, etc.)
+    }
+    recordSessionStart();
+  }, []);
+
   return (
     <Routes>
       {/* Default → sign-in */}
