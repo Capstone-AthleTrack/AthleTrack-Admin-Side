@@ -20,12 +20,21 @@ interface SignInFormValues {
 
 /* Types to avoid `any` while staying compatible with both schemas */
 type DBRole = "admin" | "coach" | "athlete" | "user" | null;
-type DBStatus = "pending" | "active" | "suspended" | "disabled" | null;
+type DBStatus = "pending" | "accepted" | "decline" | "disabled" | "active" | "suspended" | null;
 type ProfileCompat = {
   role: DBRole;
   status?: DBStatus;
   is_active?: boolean | null; // legacy boolean column
 };
+
+// Normalize mixed/legacy status values into the new set
+function normalizeStatus(s: DBStatus | string | null | undefined): "pending" | "accepted" | "decline" | "disabled" {
+  const v = String(s ?? "").toLowerCase();
+  if (v === "accepted" || v === "active") return "accepted";
+  if (v === "decline" || v === "denied" || v === "suspended") return "decline";
+  if (v === "disabled") return "disabled";
+  return "pending";
+}
 
 // PUP domain guard (client-side convenience; DB still enforces this)
 const isPupMail = (email?: string | null) =>
@@ -35,41 +44,6 @@ export default function SignIn() {
   const [form] = Form.useForm<SignInFormValues>();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
-
-  // ---- Minimal telemetry helpers (no UI changes) ----
-  async function recordLoginEvent() {
-    try {
-      const { data: userRes } = await supabase.auth.getUser();
-      const u = userRes.user;
-      if (!u) return;
-      await supabase.from("auth_events").insert({
-        user_id: u.id,
-        event: "login",
-        device: "web",
-        platform: "react",
-        provider: "password",
-      });
-    } catch (e) {
-      // RLS or table mismatch? Ignore silently.
-      console.debug("auth_events insert skipped:", e);
-    }
-  }
-
-  async function startAppSession(page: string = "/dashboard") {
-    try {
-      const { data: userRes } = await supabase.auth.getUser();
-      const u = userRes.user;
-      await supabase.from("app_sessions").insert({
-        user_id: u?.id ?? null,
-        device: "web",
-        platform: "react",
-        page,
-      });
-    } catch (e) {
-      console.debug("app_sessions insert skipped:", e);
-    }
-  }
-  // ---------------------------------------------------
 
   async function handleSignIn(values: SignInFormValues) {
     setLoading(true);
@@ -97,9 +71,6 @@ export default function SignIn() {
         return;
       }
 
-      // 2.5) Record a login event (safe no-op if RLS not ready)
-      await recordLoginEvent();
-
       // 3) Bootstrap claim (zero-admin or invite flow); ignore if not applicable
       try {
         await postSignUpBootstrap();
@@ -112,11 +83,15 @@ export default function SignIn() {
       const prof = (profRaw ?? null) as ProfileCompat | null;
 
       const role: DBRole = prof?.role ?? "user";
-      const status: DBStatus =
-        prof?.status ?? ((prof?.is_active ? "active" : "pending") as DBStatus);
+      const statusNormalized = normalizeStatus(
+        prof?.status ?? (prof?.is_active ? "accepted" : "pending")
+      );
 
-      // If not yet admin/active, auto-file a pending request (silent)
-      if (!(role === "admin" && status === "active")) {
+      // Debug info (console only, no UI changes)
+      console.info("[SignIn] gate check:", { role, status: statusNormalized });
+
+      // If not yet admin+accepted, auto-file a pending request (silent)
+      if (!(role === "admin" && statusNormalized === "accepted")) {
         try {
           await submitAdminRequest();
         } catch {
@@ -127,8 +102,7 @@ export default function SignIn() {
         return;
       }
 
-      // 5) Admin & active → record a session start then proceed
-      await startAppSession("/dashboard");
+      // 5) Admin & accepted → proceed (telemetry removed to avoid 400s)
       navigate("/dashboard");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";  
+import { useEffect, useMemo, useState } from "react";    
 import {
   Input,
   Select,
@@ -42,6 +42,7 @@ interface RequestItem {
     phone?: string;
     pupId?: string;
     sport?: string;
+    team?: string;
   };
 }
 
@@ -49,7 +50,7 @@ const BRAND = { maroon: "#7b0f0f" };
 
 /* ---------- DB types (mirror of public.profiles minimal fields) ---------- */
 type DBRole = "admin" | "coach" | "athlete" | "user" | null;
-type DBStatus = "pending" | "active" | "suspended" | "disabled" | null;
+type DBStatus = "pending" | "accepted" | "decline" | "disabled" | null;
 
 interface ProfileRow {
   id: string;
@@ -60,11 +61,25 @@ interface ProfileRow {
   phone: string | null;
   pup_id: string | null;
   sport: string | null;
+  team: string | null;
   created_at: string | null;
 }
 
 type ProfileInsert = Partial<ProfileRow>;
-type ProfileUpdate = Partial<ProfileRow>;
+
+/* RPC + View return row typing */
+type AdminListUsersRow = {
+  id: string;
+  email: string | null;
+  role: "admin" | "coach" | "athlete" | "user" | null;
+  status: string | null;
+  full_name: string | null;
+  phone: string | null;
+  pup_id: string | null;
+  sport: string | null;
+  team: string | null;
+  created_at: string | null;
+};
 
 /* ---------- role label helpers (UI <-> DB) ---------- */
 const roleDbToUi = (r: DBRole): string | undefined =>
@@ -76,10 +91,20 @@ const roleUiToDb = (r?: string): DBRole =>
 /* ---------- Request status from profile.status (for the existing UI) ---------- */
 const statusToReq: Record<Exclude<DBStatus, null>, ReqStatus> = {
   pending: "Pending",
-  active: "Accepted",
-  suspended: "Denied",
+  accepted: "Accepted",
+  decline: "Denied",
   disabled: "Denied",
 };
+
+/* Normalize DB status coming from mixed schemas (e.g., 'active' → 'accepted', 'suspended'/'denied' → 'decline') */
+function normalizeStatus(s?: string | null): DBStatus {
+  const v = String(s ?? "").toLowerCase();
+  if (v === "accepted" || v === "active") return "accepted";
+  if (v === "decline" || v === "denied" || v === "suspended") return "decline";
+  if (v === "disabled") return "disabled";
+  if (v === "pending" || v === "") return "pending";
+  return "pending";
+}
 
 /* ---------- map DB row -> existing UI item shape ---------- */
 function toItem(p: ProfileRow): RequestItem {
@@ -96,6 +121,7 @@ function toItem(p: ProfileRow): RequestItem {
       phone: p.phone ?? undefined,
       pupId: p.pup_id ?? undefined,
       sport: p.sport ?? undefined,
+      team: p.team ?? undefined,
     },
   };
 }
@@ -110,6 +136,24 @@ function Labeled({ label, value }: { label: string; value?: string }) {
       </div>
     </label>
   );
+}
+
+/* ---------- sport→team helper (keeps UI unchanged; just to populate options) ---------- */
+function allowedTeamsForSport(s?: string | null): Array<"men's" | "women's"> {
+  const v = (s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+  if (v === "baseball") return ["men's"];
+  if (v === "softball") return ["women's"];
+  if (
+    v === "basketball" ||
+    v === "beach volleyball" ||
+    v === "futsal" ||
+    v === "volleyball" ||
+    v === "sepak-takraw"
+  ) {
+    return ["men's", "women's"];
+  }
+  if (v === "football") return ["men's"];
+  return ["men's", "women's"];
 }
 
 /* ---------------- page ---------------- */
@@ -130,12 +174,85 @@ export default function UserManagement() {
   /* delete-confirm modal */
   const [showConfirm, setShowConfirm] = useState(false);
 
-  /* ---------- load from Supabase (replace mock) ---------- */
+  /* ---------- load from Supabase (view → rpc → table) ---------- */
   async function loadProfiles() {
+    // 1) SECURITY DEFINER VIEW (preferred)
+    try {
+      const { data: viewRows, error: viewErr } = await supabase
+        .from("v_users_admin")
+        .select(
+          "id,email,role,status,full_name,phone,pup_id,sport,team,created_at"
+        )
+        .order("created_at", { ascending: false });
+
+      if (!viewErr && Array.isArray(viewRows)) {
+        const items = (viewRows as AdminListUsersRow[]).map((r) =>
+          toItem({
+            id: String(r.id),
+            email: r.email ?? null,
+            role: (String(r.role ?? "user").toLowerCase() as DBRole) ?? null,
+            status: normalizeStatus(r.status),
+            full_name: r.full_name ?? null,
+            phone: r.phone ?? null,
+            pup_id: r.pup_id ?? null,
+            sport: r.sport ?? null,
+            team: r.team ?? null,
+            created_at: r.created_at ?? null,
+          })
+        );
+        setData(items);
+        if (selectedId && !items.some((d) => d.id === selectedId)) {
+          setSelectedId(null);
+        }
+        return;
+      }
+    } catch {
+      // fallthrough to RPC
+    }
+
+    // 2) SECURITY DEFINER RPC
+    try {
+      const { data: rpcRows, error: rpcErr } = await supabase.rpc(
+        "admin_list_users",
+        {
+          search: "",
+          role_filter: "all",
+          sport_filter: "all",
+          page: 1,
+          page_size: 500,
+        }
+      );
+
+      if (!rpcErr && Array.isArray(rpcRows)) {
+        const items = (rpcRows as AdminListUsersRow[]).map((r) =>
+          toItem({
+            id: String(r.id),
+            email: r.email ?? null,
+            role: (String(r.role ?? "user").toLowerCase() as DBRole) ?? null,
+            status: normalizeStatus(r.status),
+            full_name: r.full_name ?? null,
+            phone: r.phone ?? null,
+            pup_id: r.pup_id ?? null,
+            sport: r.sport ?? null,
+            team: r.team ?? null,
+            created_at: r.created_at ?? null,
+          })
+        );
+        setData(items);
+        if (selectedId && !items.some((d) => d.id === selectedId)) {
+          setSelectedId(null);
+        }
+        return;
+      }
+    } catch {
+      // fallthrough to table
+    }
+
+    // 3) Fallback: direct table read (RLS may restrict to current user)
     const { data: rows, error } = await supabase
       .from("profiles")
       .select(
-        "id,email,role,status,full_name,phone,pup_id,sport,created_at"
+        "id,email,role,status,full_name,phone,pup_id,sport,team,created_at"
       )
       .order("created_at", { ascending: false });
 
@@ -145,10 +262,11 @@ export default function UserManagement() {
       return;
     }
 
-    const items = (rows as ProfileRow[]).map(toItem);
+    const items = (rows as ProfileRow[]).map((p) =>
+      toItem({ ...p, status: normalizeStatus(p.status) })
+    );
     setData(items);
 
-    // keep selection valid
     if (selectedId && !items.some((d) => d.id === selectedId)) {
       setSelectedId(null);
     }
@@ -156,7 +274,6 @@ export default function UserManagement() {
 
   useEffect(() => {
     loadProfiles();
-    // Also reload when auth state changes (keeps list fresh after edits elsewhere)
     const sub = supabase.auth.onAuthStateChange(() => loadProfiles());
     return () => sub.data.subscription.unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -197,15 +314,15 @@ export default function UserManagement() {
     try {
       const values = await form.validateFields();
 
-      // Insert into public.profiles (DB will default created_at / id if set)
       const payload: ProfileInsert = {
         email: values.email,
         role: roleUiToDb(values.role),
-        status: "active",
+        status: "accepted",
         full_name: values.name ?? null,
         phone: values.phone ?? null,
         pup_id: values.pupId ?? null,
         sport: values.sport ?? null,
+        team: values.team ?? null,
       };
 
       const { error } = await supabase
@@ -217,8 +334,7 @@ export default function UserManagement() {
       message.success("User added.");
       closeAdd();
       await loadProfiles();
-    } catch (err: unknown) {
-      if (err instanceof Error) console.error(err);
+    } catch {
       message.error("Failed to add user.");
     }
   };
@@ -234,30 +350,27 @@ export default function UserManagement() {
       phone: selected.extra?.phone || "",
       pupId: selected.extra?.pupId || "",
       sport: selected.extra?.sport || "",
+      team: selected.extra?.team || "",
     });
   };
   const closeEdit = () => {
     setIsEditOpen(false);
     editForm.resetFields();
   };
+
+  // Only update Sport, Team, Role (others are read-only) via admin RPC
   const handleEditSubmit = async () => {
     if (!selected) return;
     try {
       const values = await editForm.validateFields();
 
-      const update: ProfileUpdate = {
-        full_name: values.name ?? null,
-        email: values.email ?? null,
-        role: roleUiToDb(values.role),
-        phone: values.phone ?? null,
-        pup_id: values.pupId ?? null,
-        sport: values.sport ?? null,
-      };
-
-      const { error } = await supabase
-        .from("profiles")
-        .update(update)
-        .eq("id", selected.id);
+      // Use SECURITY DEFINER RPC so RLS does not block admin updates
+      const { error } = await supabase.rpc("admin_update_profile", {
+        target_id: selected.id,
+        new_role: roleUiToDb(values.role),
+        new_sport: values.sport ?? null,
+        new_team: values.team ?? null,
+      });
 
       if (error) throw error;
 
@@ -265,7 +378,7 @@ export default function UserManagement() {
       closeEdit();
       await loadProfiles();
       setSelectedId(selected.id); // keep focus
-    } catch (err: unknown) {
+    } catch (err) {
       if (err instanceof Error) console.error(err);
       message.error("Failed to update profile.");
     }
@@ -282,8 +395,7 @@ export default function UserManagement() {
       setShowConfirm(false);
       message.success("User deleted.");
       await loadProfiles();
-    } catch (err: unknown) {
-      if (err instanceof Error) console.error(err);
+    } catch {
       message.error("Failed to delete profile.");
     }
   };
@@ -416,6 +528,7 @@ export default function UserManagement() {
                     label="PUP ID Number"
                   />
                   <Labeled value={selected.extra?.sport} label="Sport" />
+                  <Labeled value={selected.extra?.team} label="Team" />
                   <Labeled value={selected.email} label="Email Address" />
                   <Labeled value={selected.extra?.phone} label="Phone Number" />
                   <Labeled value={selected.extra?.role} label="Role" />
@@ -501,6 +614,21 @@ export default function UserManagement() {
             <Form.Item label="Sport" name="sport">
               <Input placeholder="e.g. Basketball" />
             </Form.Item>
+
+            <Form.Item
+              label="Team"
+              name="team"
+              dependencies={['sport']}
+              rules={[{ required: false }]}
+            >
+              <Select
+                placeholder="Select team"
+                options={allowedTeamsForSport(form.getFieldValue('sport')).map((t) => ({
+                  label: t === "men's" ? "Men’s" : "Women’s",
+                  value: t,
+                }))}
+              />
+            </Form.Item>
           </div>
         </Form>
       </Modal>
@@ -523,7 +651,7 @@ export default function UserManagement() {
             name="name"
             rules={[{ required: true, message: "Please enter full name" }]}
           >
-            <Input placeholder="e.g. Juan Dela Cruz" />
+            <Input placeholder="e.g. Juan Dela Cruz" disabled />
           </Form.Item>
 
           <Form.Item
@@ -534,7 +662,7 @@ export default function UserManagement() {
               { type: "email", message: "Invalid email" },
             ]}
           >
-            <Input placeholder="name@athletrack.ph" />
+            <Input placeholder="name@athletrack.ph" disabled />
           </Form.Item>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -555,17 +683,32 @@ export default function UserManagement() {
             </Form.Item>
 
             <Form.Item label="Phone" name="phone">
-              <Input placeholder="+63 9XX XXX XXXX" />
+              <Input placeholder="+63 9XX XXX XXXX" disabled />
             </Form.Item>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <Form.Item label="PUP ID" name="pupId">
-              <Input placeholder="e.g. PUP-23-001" />
+              <Input placeholder="e.g. PUP-23-001" disabled />
             </Form.Item>
 
             <Form.Item label="Sport" name="sport">
               <Input placeholder="e.g. Basketball" />
+            </Form.Item>
+
+            <Form.Item
+              label="Team"
+              name="team"
+              dependencies={['sport']}
+              rules={[{ required: false }]}
+            >
+              <Select
+                placeholder="Select team"
+                options={allowedTeamsForSport(editForm.getFieldValue('sport')).map((t) => ({
+                  label: t === "men's" ? "Men’s" : "Women’s",
+                  value: t,
+                }))}
+              />
             </Form.Item>
           </div>
         </Form>
