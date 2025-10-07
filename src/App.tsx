@@ -23,15 +23,30 @@ import supabase from "@/core/supabase";
 const isPupMail = (email?: string | null) =>
   !!email && email.toLowerCase().endsWith("@iskolarngbayan.pup.edu.ph");
 
+type ProfileRowLite = {
+  role: "admin" | "coach" | "athlete" | "user" | null;
+  status: string | null;
+  is_active?: boolean | null; // legacy support
+  email?: string | null;
+} | null;
+
 /** Invisible route guard:
  * - must be signed in
  * - must be PUP webmail
- * - must have profiles.role='admin' AND (profiles.status='active' OR profiles.is_active=true)
+ * - must have profiles.role='admin' AND status IN ('accepted','active')  (or legacy is_active=true)
  * Otherwise → redirect to /sign-in
  */
 function RequireAdminActive({ children }: { children: ReactElement }): ReactElement | null {
   const [ready, setReady] = useState(false);
   const [redirect, setRedirect] = useState<string | null>(null);
+
+  // helper: accept new and legacy status values
+  const isAllowedStatus = (status?: string | null, legacyIsActive?: boolean | null) => {
+    const v = (status ?? "").toLowerCase();
+    if (v === "accepted" || v === "active") return true;
+    if (!status && legacyIsActive === true) return true; // very old schema
+    return false;
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -49,19 +64,47 @@ function RequireAdminActive({ children }: { children: ReactElement }): ReactElem
         return;
       }
 
-      // NOTE: select both status and is_active to be compatible with older schema
-      const { data: prof } = await supabase
-        .from("profiles")
-        .select("role,status,is_active")
-        .eq("id", session.user.id)
-        .maybeSingle();
+      // Try profile by id first
+      let role: string | null | undefined = null;
+      let status: string | null | undefined = null;
+      let legacyIsActive: boolean | null | undefined = null;
 
-      const isAdmin = prof?.role === "admin";
-      const isActive =
-        prof?.status === "active" ||
-        (prof?.status == null && prof?.is_active === true);
+      try {
+        const { data: byId } = await supabase
+          .from("profiles")
+          .select("role,status,is_active,email")
+          .eq("id", session.user.id)
+          .maybeSingle();
 
-      const ok = isAdmin && isActive;
+        const byIdRow = byId as ProfileRowLite;
+        if (byIdRow) {
+          role = byIdRow.role;
+          status = byIdRow.status;
+          legacyIsActive = byIdRow.is_active ?? null;
+        } else {
+          // Fallback: profile by email (covers older rows keyed to a different uuid)
+          const email = session.user.email ?? "";
+          if (email) {
+            const { data: byEmail } = await supabase
+              .from("profiles")
+              .select("role,status,is_active,email")
+              .eq("email", email)
+              .maybeSingle();
+
+            const byEmailRow = byEmail as ProfileRowLite;
+            if (byEmailRow) {
+              role = byEmailRow.role;
+              status = byEmailRow.status;
+              legacyIsActive = byEmailRow.is_active ?? null;
+            }
+          }
+        }
+      } catch {
+        // ignore; we'll treat as not allowed below
+      }
+
+      const isAdmin = role === "admin";
+      const ok = isAdmin && isAllowedStatus(status, legacyIsActive);
 
       if (isMounted) {
         setRedirect(ok ? null : "/sign-in");
