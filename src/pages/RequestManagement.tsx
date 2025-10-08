@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";   
+import { useEffect, useMemo, useState, useCallback } from "react";    
 import { Input, Select, Button, Empty, Avatar, Tag, message, Popconfirm } from "antd";
 import {
   UserOutlined,
@@ -66,6 +66,16 @@ type MiniProfile = {
   email: string | null;
 };
 
+/** Fallback profile shape when reading pending profiles */
+type FallbackProfile = {
+  id: string;
+  full_name: string | null;
+  email: string | null;
+  updated_at: string | null;
+  role: string | null;
+  status: string | null;
+};
+
 const BRAND = { maroon: "#7b0f0f" };
 
 /* ---------------- small helpers ---------------- */
@@ -98,34 +108,97 @@ export default function RequestManagement() {
   const [reasonDraft, setReasonDraft] = useState("");
 
   // ---- load from backend ----
-  const refreshRequests = async () => {
+  const refreshRequests = useCallback(async () => {
     try {
       setLoading(true);
 
-      const { data: rowsRaw, error } = await supabase
+      // Try full column set first, then gracefully narrow if the table/view is missing some columns (prevents 400 Bad Request)
+      const selectFull = [
+        "id",
+        "user_id",
+        "email",
+        "full_name",
+        "device_name",
+        "desired_role",
+        "status",
+        "reason",
+        "created_at",
+        "decided_by",
+        "decided_at",
+        "phone",
+        "pup_id",
+        "sport",
+      ].join(",");
+
+      const selectBase = [
+        "id",
+        "user_id",
+        "email",
+        "full_name",
+        "device_name",
+        "desired_role",
+        "status",
+        "reason",
+        "created_at",
+      ].join(",");
+
+      let rowsRaw: unknown[] | null = null;
+
+      // attempt 1 — full superset
+      const resp = await supabase
         .from("account_requests")
-        .select(
-          [
-            "id",
-            "user_id",
-            "email",
-            "full_name",
-            "device_name",
-            "desired_role",
-            "status",
-            "reason",
-            "created_at",
-            "decided_by",
-            "decided_at",
-            "phone",
-            "pup_id",
-            "sport",
-          ].join(",")
-        )
+        .select(selectFull)
         .order("created_at", { ascending: false })
         .range(0, 199);
 
-      if (error) throw error;
+      if (resp.error) {
+        // attempt 2 — minimal base columns (handles schema drift)
+        const resp2 = await supabase
+          .from("account_requests")
+          .select(selectBase)
+          .order("created_at", { ascending: false })
+          .range(0, 199);
+
+        if (resp2.error) {
+          // attempt 3 — fallback to profiles pending (so the list never goes blank)
+          const fb = await supabase
+            .from("profiles")
+            .select("id,full_name,email,updated_at,role,status")
+            .eq("status", "pending")
+            .order("updated_at", { ascending: false })
+            .range(0, 199);
+
+          if (fb.error) throw fb.error;
+
+          const fallbackRows = (fb.data ?? []) as FallbackProfile[];
+          const mappedFromProfiles: RequestItem[] = fallbackRows.map((p) => ({
+            id: p.id,
+            kind: "AthleteRequests",
+            name: p.full_name || "",
+            email: p.email || undefined,
+            deviceName: undefined,
+            issuedAt: p.updated_at || new Date().toISOString(),
+            status: "Pending",
+            reason: "",
+            extra: {
+              userId: p.id,
+              role: p.role
+                ? `${String(p.role).charAt(0).toUpperCase()}${String(p.role).slice(1)}`
+                : "Athlete",
+            },
+          }));
+          setData(mappedFromProfiles);
+          // clear selection safely without capturing selectedId
+          setSelectedId((prev) =>
+            prev && !mappedFromProfiles.find((m) => m.id === prev) ? null : prev
+          );
+          return;
+        } else {
+          rowsRaw = resp2.data ?? [];
+        }
+      } else {
+        rowsRaw = resp.data ?? [];
+      }
 
       const rows = (Array.isArray(rowsRaw) ? rowsRaw : []) as unknown as DbReqRow[];
 
@@ -176,9 +249,8 @@ export default function RequestManagement() {
 
       setData(mapped);
 
-      if (selectedId && !mapped.find((m) => m.id === selectedId)) {
-        setSelectedId(null);
-      }
+      // clear selection safely without capturing selectedId
+      setSelectedId((prev) => (prev && !mapped.find((m) => m.id === prev) ? null : prev));
     } catch (e) {
       if (e instanceof Error) {
         message.error(e.message);
@@ -188,11 +260,11 @@ export default function RequestManagement() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     void refreshRequests();
-  });
+  }, [refreshRequests]);
 
   useEffect(() => {
     const sel = data.find((d) => d.id === selectedId);
@@ -235,24 +307,40 @@ export default function RequestManagement() {
       const decidedAt = new Date().toISOString();
 
       if (status === "Accepted") {
-        const { error: e1 } = await supabase
-          .from("account_requests")
-          .update({
-            status: "approved",
-            reason: cleanReason,
-            decided_by: decidedBy,
-            decided_at: decidedAt,
-          })
-          .eq("id", id)
-          .eq("status", "pending");
-        if (e1) throw e1;
+        // First, mark the request approved (if the table lacks some columns, retry with a minimal update)
+        const tryApprove = async () => {
+          const { error: e1 } = await supabase
+            .from("account_requests")
+            .update({
+              status: "approved",
+              reason: cleanReason,
+              decided_by: decidedBy,
+              decided_at: decidedAt,
+            })
+            .eq("id", id)
+            .eq("status", "pending");
+          if (e1) {
+            // minimal update fallback (for schemas without decided_by/decided_at)
+            const { error: eMin } = await supabase
+              .from("account_requests")
+              .update({
+                status: "approved",
+                reason: cleanReason,
+              })
+              .eq("id", id)
+              .eq("status", "pending");
+            if (eMin) throw eMin;
+          }
+        };
+        await tryApprove();
 
         const finalRole: FinalRole =
           (item.extra?.role?.toLowerCase() as FinalRole) || "athlete";
         if (item.extra?.userId) {
+          // IMPORTANT: use existing enum label 'accepted' (NOT 'active')
           const { error: e2 } = await supabase
             .from("profiles")
-            .update({ role: finalRole, status: "active", is_active: true, updated_at: decidedAt })
+            .update({ role: finalRole, status: "accepted", is_active: true, updated_at: decidedAt })
             .eq("id", item.extra.userId);
           if (e2) throw e2;
         }
@@ -267,7 +355,18 @@ export default function RequestManagement() {
           })
           .eq("id", id)
           .eq("status", "pending");
-        if (e3) throw e3;
+        if (e3) {
+          // minimal fallback if columns are missing
+          const { error: eMin2 } = await supabase
+            .from("account_requests")
+            .update({
+              status: "denied",
+              reason: cleanReason,
+            })
+            .eq("id", id)
+            .eq("status", "pending");
+          if (eMin2) throw eMin2;
+        }
       }
 
       await refreshRequests();

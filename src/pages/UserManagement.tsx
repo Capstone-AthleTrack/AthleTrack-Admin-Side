@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";    
+import { useEffect, useMemo, useState } from "react";      
 import {
   Input,
   Select,
@@ -23,6 +23,10 @@ import NavBar from "@/components/NavBar";
 
 /* ---------- Supabase client (reads/writes public.profiles) ---------- */
 import { supabase } from "@/core/supabase";
+
+/* ---------- Avatars (signed URLs; no UI changes) ---------- */
+import { bulkSignedByUserIds } from "@/services/avatars";
+import { subscribeProfilesAvatar } from "@/hooks/useAvatarRealtime";
 
 /* ---------------- types + constants ---------------- */
 type ReqStatus = "Pending" | "Accepted" | "Denied";
@@ -174,6 +178,21 @@ export default function UserManagement() {
   /* delete-confirm modal */
   const [showConfirm, setShowConfirm] = useState(false);
 
+  /* ---------- signed avatar URLs (read-only) ---------- */
+  const [avatarSrcById, setAvatarSrcById] = useState<Record<string, string>>({});
+
+  async function refreshAvatars(ids: string[]) {
+    if (!ids.length) return;
+    try {
+      const signedMap = await bulkSignedByUserIds(ids, 60 * 60 * 24);
+      if (Object.keys(signedMap).length) {
+        setAvatarSrcById((prev) => ({ ...prev, ...signedMap }));
+      }
+    } catch {
+      // ignore; avatars fall back to initials/icon
+    }
+  }
+
   /* ---------- load from Supabase (view → rpc → table) ---------- */
   async function loadProfiles() {
     // 1) SECURITY DEFINER VIEW (preferred)
@@ -201,6 +220,7 @@ export default function UserManagement() {
           })
         );
         setData(items);
+        await refreshAvatars(items.map((i) => i.id));
         if (selectedId && !items.some((d) => d.id === selectedId)) {
           setSelectedId(null);
         }
@@ -239,6 +259,7 @@ export default function UserManagement() {
           })
         );
         setData(items);
+        await refreshAvatars(items.map((i) => i.id));
         if (selectedId && !items.some((d) => d.id === selectedId)) {
           setSelectedId(null);
         }
@@ -266,6 +287,7 @@ export default function UserManagement() {
       toItem({ ...p, status: normalizeStatus(p.status) })
     );
     setData(items);
+    await refreshAvatars(items.map((i) => i.id));
 
     if (selectedId && !items.some((d) => d.id === selectedId)) {
       setSelectedId(null);
@@ -278,6 +300,23 @@ export default function UserManagement() {
     return () => sub.data.subscription.unsubscribe();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /* Realtime: subscribe only to the currently listed users; refresh the changed one */
+  useEffect(() => {
+    if (!data.length) return;
+
+    const ids = data.map((d) => d.id);
+    const unsubscribe = subscribeProfilesAvatar(ids, async ({ id }) => {
+      const single = await bulkSignedByUserIds([id], 60 * 60 * 24);
+      if (single[id]) {
+        setAvatarSrcById((prev) => ({ ...prev, [id]: single[id] }));
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [data]);
 
   /* ---------- derived lists ---------- */
   const list = useMemo(() => {
@@ -475,7 +514,7 @@ export default function UserManagement() {
                 }
               >
                 <div className="flex items-center gap-3 text-left min-w-0">
-                  <Avatar icon={<UserOutlined />} />
+                  <Avatar icon={<UserOutlined />} src={avatarSrcById[item.id]} />
                   <div className="leading-tight truncate max-w-[220px]">
                     <div className="font-semibold text-gray-900 truncate">
                       {item.name}
@@ -507,7 +546,7 @@ export default function UserManagement() {
             ) : (
               <div className="space-y-5" onDoubleClick={openEdit}>
                 <div className="rounded-2xl border p-5 flex flex-wrap items-center gap-4">
-                  <Avatar size={72} icon={<UserOutlined />} />
+                  <Avatar size={72} icon={<UserOutlined />} src={avatarSrcById[selected.id]} />
                   <div className="min-w-[220px]">
                     <div className="text-lg font-semibold leading-tight">
                       {selected.name}

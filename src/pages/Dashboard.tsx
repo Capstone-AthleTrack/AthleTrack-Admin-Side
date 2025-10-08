@@ -1,4 +1,8 @@
-import { Card, Button, Tabs } from "antd"; 
+// src/pages/Dashboard.tsx (admin) 
+// Patch: fix ESLint (no-explicit-any, unused vars, prefer-const) and
+// wire cards & charts to telemetry via services (no UI/styling changes).
+
+import { Card, Button, Tabs } from "antd";
 import type { TabsProps } from "antd";
 import {
   ResponsiveContainer,
@@ -12,55 +16,61 @@ import {
 import Navbar from "@/components/NavBar";
 import { BRAND } from "@/brand";
 import { useEffect, useMemo, useState } from "react";
-import supabase from "@/core/supabase";
+import { supabase } from "@/core/supabase";
+import {
+  exportReportsCSV,
+  exportLoginCSV,
+  fetchDailyReports,
+  fetchLoginFrequency,
+} from "@/services/metrics";
+/* Avatars: get a signed URL for the logged-in admin (no UI changes) */
+import { bulkSignedByUserIds } from "@/services/avatars";
+
+/* Augment window to carry the optional navbar avatar URL without `any` */
+declare global {
+  interface Window {
+    __NAVBAR_AVATAR_URL__?: string;
+  }
+}
+
+/* ----------------------------- Local types ------------------------------ */
 
 type UsagePoint = { time: string; active: number; visits: number };
-const usageData: UsagePoint[] = [
-  { time: "11 AM", active: 60, visits: 30 },
-  { time: "12 PM", active: 80, visits: 38 },
-  { time: "1 PM", active: 65, visits: 36 },
-  { time: "2 PM", active: 85, visits: 40 },
-  { time: "3 PM", active: 70, visits: 33 },
-  { time: "4 PM", active: 92, visits: 37 },
-  { time: "5 PM", active: 76, visits: 34 },
-  { time: "6 PM", active: 88, visits: 36 },
-  { time: "7 PM", active: 73, visits: 32 },
-  { time: "8 PM", active: 80, visits: 45 },
-  { time: "9 PM", active: 72, visits: 30 },
-  { time: "10 PM", active: 75, visits: 48 },
-];
-
 type LoginPoint = { date: string; coaches: number; athletes: number };
-const loginFreq: LoginPoint[] = [
-  { date: "JUNE 16", coaches: 10, athletes: 20 },
-  { date: "JUNE 17", coaches: 50, athletes: 65 },
-  { date: "JUNE 18", coaches: 70, athletes: 90 },
-  { date: "JUNE 19", coaches: 65, athletes: 70 },
-  { date: "JUNE 20", coaches: 85, athletes: 95 },
-  { date: "JUNE 21", coaches: 15, athletes: 85 },
-  { date: "JUNE 22", coaches: 12, athletes: 90 },
-];
 
-/* ---- DB row types (views) ---- */
 type SummaryRow = {
   total_users: number;
   app_visits: number;
   new_users: number;
   active_users: number;
 };
-type ActivityRow = {
-  bucket: string;                 // timestamptz
-  session_starts?: number | null; // plural (current)
-  session_start?: number | null;  // singular (fallback)
-  active_users: number | null;
-};
-type LoginRow = {
-  day: string;        // date/timestamptz
-  athletes: number;
-  coaches: number;
-};
 
-/* ---- small helpers ---- */
+/* ----------------------------- Helpers ---------------------------------- */
+
+// PH timezone helpers (UTC+8, no DST)
+const PH_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+function ymd(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
+function dayBoundsPH(d: Date): { fromIso: string; toIso: string; day: string } {
+  const y = d.getFullYear();
+  const m = d.getMonth();
+  const dd = d.getDate();
+  const fromUtc = new Date(Date.UTC(y, m, dd, -8, 0, 0, 0));
+  const toUtc = new Date(Date.UTC(y, m, dd + 1, -8, 0, 0, 0));
+  return { fromIso: fromUtc.toISOString(), toIso: toUtc.toISOString(), day: ymd(d) };
+}
+
+function toPH(utcIso: string): Date {
+  const t = new Date(utcIso).getTime();
+  return new Date(t + PH_OFFSET_MS);
+}
+
 function fmt(n: number | undefined | null) {
   if (typeof n !== "number") return "0";
   try {
@@ -69,8 +79,7 @@ function fmt(n: number | undefined | null) {
     return String(n);
   }
 }
-function fmtHourLabel(ts: string) {
-  const d = new Date(ts);
+function fmtHourLabelFromDate(d: Date) {
   return d.toLocaleString("en-US", { hour: "numeric", hour12: true });
 }
 function fmtDayLabel(ts: string) {
@@ -78,23 +87,13 @@ function fmtDayLabel(ts: string) {
   const label = d.toLocaleString("en-US", { month: "long", day: "2-digit" });
   return label.toUpperCase();
 }
-function downloadCsv<T extends Record<string, unknown>>(filename: string, rows: T[]) {
-  if (!rows || !rows.length) return;
-  const first = rows[0] as Record<string, unknown>;
-  const headers = Object.keys(first);
-  const csv = [
-    headers.join(","),
-    ...rows.map((row) => {
-      const r = row as Record<string, unknown>;
-      return headers.map((h) => JSON.stringify(r[h] ?? "")).join(",");
-    }),
-  ].join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
+
+type PostgrestErrorLike = { code?: string; message?: string };
+function relationMissing(error: PostgrestErrorLike | null | undefined): boolean {
+  return !!error && (error.code === "42P01" || /relation .* does not exist/i.test(error.message || ""));
 }
+
+/* ----------------------------- Component -------------------------------- */
 
 export default function Dashboard() {
   const tabItems: TabsProps["items"] = [
@@ -105,66 +104,228 @@ export default function Dashboard() {
 
   // ---- live data state (UI preserved) ----
   const [kpi, setKpi] = useState<SummaryRow | null>(null);
-  const [usageSeries, setUsageSeries] = useState<UsagePoint[]>(usageData);
-  const [loginSeries, setLoginSeries] = useState<LoginPoint[]>(loginFreq);
+  const [usageSeries, setUsageSeries] = useState<UsagePoint[]>([]);
+  const [loginSeries, setLoginSeries] = useState<LoginPoint[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // Logged-in admin avatar (signed URL)
+  const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
+
+  // Resolve current user and sign their avatar for the Navbar (no UI change)
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getUser();
+        const uid = data?.user?.id;
+        if (!uid) return;
+        const map = await bulkSignedByUserIds([uid], 60 * 60 * 24);
+        if (!alive) return;
+        if (map && map[uid]) setAvatarUrl(map[uid]);
+      } catch {
+        /* ignore; Navbar will keep its fallback */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Optionally expose the avatar URL globally so a NavBar that listens can pick it up
+  useEffect(() => {
+    if (!avatarUrl) return;
+    try {
+      localStorage.setItem("nav_avatar_url", avatarUrl);
+      window.__NAVBAR_AVATAR_URL__ = avatarUrl;
+      window.dispatchEvent(new CustomEvent("navbar:avatar", { detail: { url: avatarUrl } }));
+    } catch {
+      /* ignore */
+    }
+  }, [avatarUrl]);
 
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
         setLoading(true);
-        const [s, a, l] = await Promise.all([
-          supabase.from("v_dash_summary_today").select("*").single(),
-          supabase.from("v_daily_activity_24h").select("*").order("bucket", { ascending: true }),
-          supabase.from("v_login_frequency_7d").select("*").order("day", { ascending: true }),
-        ]);
 
-        if (!s.error && s.data && alive) {
-          setKpi(s.data as SummaryRow);
+        // 1) KPI cards — app visits & active users from telemetry; total / new users from profiles
+        const today = new Date();
+        const { fromIso: phStartIso, toIso: phEndIso } = dayBoundsPH(today);
+
+        // appVisits + activeUsers from sessions (via service helper)
+        const reports = await fetchDailyReports().catch(() => null);
+
+        // total users from profiles
+        let totalUsers = 0;
+        {
+          const { count, error } = await supabase
+            .from("profiles")
+            .select("*", { count: "exact", head: true });
+          if (!error && typeof count === "number") totalUsers = count;
         }
-        if (!a.error && Array.isArray(a.data) && alive) {
-          const mapped: UsagePoint[] = (a.data as ActivityRow[]).map((r) => ({
-            time: fmtHourLabel(r.bucket),
-            active: Number(r.active_users ?? 0),
-            visits: Number((r.session_starts ?? r.session_start ?? 0) as number),
-          }));
-          setUsageSeries(mapped);
+
+        // new users today (try created_at, then inserted_at)
+        let newUsers = 0;
+        {
+          let counted = false;
+          const r1 = await supabase
+            .from("profiles")
+            .select("*", { count: "exact", head: true })
+            .gte("created_at", phStartIso)
+            .lt("created_at", phEndIso);
+          if (!r1.error && typeof r1.count === "number") {
+            newUsers = r1.count;
+            counted = true;
+          }
+          if (!counted && r1.error) {
+            const r2 = await supabase
+              .from("profiles")
+              .select("*", { count: "exact", head: true })
+              .gte("inserted_at", phStartIso)
+              .lt("inserted_at", phEndIso);
+            if (!r2.error && typeof r2.count === "number") {
+              newUsers = r2.count;
+            }
+          }
         }
-        if (!l.error && Array.isArray(l.data) && alive) {
-          const mapped: LoginPoint[] = (l.data as LoginRow[]).map((r) => ({
-            date: fmtDayLabel(r.day),
-            coaches: Number(r.coaches ?? 0),
-            athletes: Number(r.athletes ?? 0),
+
+        if (alive) {
+          setKpi({
+            total_users: totalUsers,
+            app_visits: reports?.appVisits ?? 0,
+            new_users: newUsers,
+            active_users: reports?.activeUsers ?? 0,
+          });
+        }
+
+        // 2) Usage line (last 24h by hour) — prefer direct table; fallback to legacy view if present
+        const now = new Date();
+        const from24 = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        const fromIso = from24.toISOString();
+        const toIso = now.toISOString();
+
+        // Build empty 24 buckets oldest→newest
+        const buckets: { label: string; users: Set<string>; visits: number }[] = [];
+        for (let i = 23; i >= 0; i--) {
+          const h = new Date(now.getTime() - i * 60 * 60 * 1000);
+          const lbl = fmtHourLabelFromDate(h);
+          buckets.push({ label: lbl, users: new Set(), visits: 0 });
+        }
+
+        let haveUsage = false;
+
+        // Try direct from sessions
+        try {
+          const { data: sess, error } = await supabase
+            .from("sessions")
+            .select("user_id, started_at")
+            .gte("started_at", fromIso)
+            .lt("started_at", toIso)
+            .order("started_at", { ascending: true })
+            .limit(100000);
+
+          if (!error && Array.isArray(sess)) {
+            for (const row of sess as Array<{ user_id: string; started_at: string }>) {
+              const ph = toPH(row.started_at);
+              const label = fmtHourLabelFromDate(
+                new Date(ph.getFullYear(), ph.getMonth(), ph.getDate(), ph.getHours())
+              );
+              const bucket = buckets.find((b) => b.label === label);
+              if (bucket) {
+                bucket.visits += 1;
+                bucket.users.add(row.user_id);
+              }
+            }
+            haveUsage = true;
+          } else if (relationMissing(error)) {
+            haveUsage = false;
+          }
+        } catch {
+          haveUsage = false;
+        }
+
+        // Fallback to legacy view `v_daily_activity_24h`
+        if (!haveUsage) {
+          try {
+            const a = await supabase
+              .from("v_daily_activity_24h")
+              .select("*")
+              .order("bucket", { ascending: true });
+
+            if (!a.error && Array.isArray(a.data)) {
+              const mapped: UsagePoint[] = (a.data as Array<{
+                bucket: string;
+                active_users?: number | null;
+                session_starts?: number | null;
+                session_start?: number | null;
+              }>).map((r) => ({
+                time: fmtHourLabelFromDate(new Date(r.bucket)),
+                active: Number(r.active_users ?? 0),
+                visits: Number((r.session_starts ?? r.session_start ?? 0) as number),
+              }));
+              if (alive) setUsageSeries(mapped);
+            }
+          } catch {
+            // ignore
+          }
+        } else {
+          // Convert buckets to series
+          const mapped: UsagePoint[] = buckets.map((b) => ({
+            time: b.label,
+            active: b.users.size,
+            visits: b.visits,
           }));
-          setLoginSeries(mapped);
+          if (alive) setUsageSeries(mapped);
+        }
+
+        // 3) Login frequency (last 30 days) via service (direct-table fallback inside)
+        try {
+          const end = new Date();
+          const start = new Date(end.getTime() - 29 * 86400000);
+          const rows = await fetchLoginFrequency(start, end);
+          if (alive) {
+            setLoginSeries(
+              rows.map((r) => ({
+                date: fmtDayLabel(r.day),
+                athletes: Number(r.athlete ?? 0),
+                coaches: Number(r.coach ?? 0),
+              }))
+            );
+          }
+        } catch {
+          // If service fails, do nothing (keeps empty chart)
         }
       } finally {
         if (alive) setLoading(false);
       }
     })();
-    return () => { alive = false; };
+
+    return () => {
+      alive = false;
+    };
   }, []);
 
-  const exportUsageCsv = () => downloadCsv("activity_24h.csv", usageSeries);
-  const exportLoginCsv =  () => downloadCsv("login_frequency_7d.csv", loginSeries);
+  // CSV handlers (admin-only RPCs under the hood or direct-table)
+  const exportUsageCsv = () => exportReportsCSV();
+  const exportLoginCsv = () => exportLoginCSV();
 
   const totalUsers = useMemo(() => fmt(kpi?.total_users), [kpi]);
-  const appVisits  = useMemo(() => fmt(kpi?.app_visits),  [kpi]);
-  const newUsers   = useMemo(() => fmt(kpi?.new_users),   [kpi]);
-  const activeUsers= useMemo(() => fmt(kpi?.active_users),[kpi]);
+  const appVisits = useMemo(() => fmt(kpi?.app_visits), [kpi]);
+  const newUsers = useMemo(() => fmt(kpi?.new_users), [kpi]);
+  const activeUsers = useMemo(() => fmt(kpi?.active_users), [kpi]);
 
   return (
     <div
       className="min-h-screen w-full flex flex-col text-[#111]"
       style={{
         background: BRAND.maroon,
-        backgroundImage:
-          "radial-gradient(rgba(255,255,255,0.06) 1px, transparent 1px)",
+        backgroundImage: "radial-gradient(rgba(255,255,255,0.06) 1px, transparent 1px)",
         backgroundSize: "14px 14px",
       }}
     >
-      <Navbar/>
+      {/* Navbar UI is unchanged; it can pick up avatar from global/localStorage if supported */}
+      <Navbar />
       <main className="flex-1 w-full px-6 py-10">
         {/* dashboard cards */}
         <section className="mx-auto w-full px-6 py-10">
@@ -234,22 +395,8 @@ export default function Dashboard() {
                     <YAxis tick={{ fontSize: 14 }} />
                     <Tooltip />
                     <Legend formatter={(v) => <span style={{ fontSize: "14px" }}>{v}</span>} />
-                    <Line
-                      type="monotone"
-                      dataKey="coaches"
-                      stroke="#ff7aa2"
-                      strokeWidth={2}
-                      dot
-                      name="Coaches"
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="athletes"
-                      stroke="#8ad0ff"
-                      strokeWidth={2}
-                      dot
-                      name="Athletes"
-                    />
+                    <Line type="monotone" dataKey="coaches" stroke="#ff7aa2" strokeWidth={2} dot name="Coaches" />
+                    <Line type="monotone" dataKey="athletes" stroke="#8ad0ff" strokeWidth={2} dot name="Athletes" />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
