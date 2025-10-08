@@ -1,4 +1,4 @@
-/* src/pages/Settings.tsx */
+/* src/pages/Settings.tsx */  
 import { useEffect, useState } from "react";
 import {
   Form,
@@ -27,6 +27,10 @@ import { BRAND } from "@/brand";
 import { getMyProfile, updateMyProfile } from "@/services/profile";
 import { changePassword } from "@/services/authSecurity";
 
+/* ── storage/signing (no UI change) ── */
+import { supabase } from "@/core/supabase";
+import { getVersionedAvatarSrc } from "@/services/avatars";
+
 const { Item } = Form;
 
 /* ───────── TYPES ───────── */
@@ -41,6 +45,7 @@ interface SecurityValues {
   newPassword: string;
   confirmNew: string;
 }
+type PendingAvatar = { blob: Blob; fileName: string };
 
 /* ───────── MOCK DATA ───────── */
 const mockProfile: ProfileValues = {
@@ -54,8 +59,9 @@ export default function Settings() {
   const navigate = useNavigate();
 
   /* state */
-  const [avatarUrl, setAvatarUrl] = useState<string>();           // live preview
-  const [savedAvatarUrl, setSavedAvatarUrl] = useState<string>(); // last-saved
+  const [avatarUrl, setAvatarUrl] = useState<string>();           // live preview (data URL or signed URL)
+  const [savedAvatarUrl, setSavedAvatarUrl] = useState<string>(); // last-saved signed URL
+  const [pendingAvatar, setPendingAvatar] = useState<PendingAvatar>(); // cropped square awaiting save
   const [savedProfile, setSavedProfile] = useState<ProfileValues>(mockProfile);
   const [loading, setLoading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -65,6 +71,42 @@ export default function Settings() {
   const [msgApi, msgCtx] = message.useMessage();
   const [modal, modalCtx] = Modal.useModal();
   message.config({ top: 72 });
+
+  /* helpers: square-crop to match circle frame (ensure 1:1) */
+  async function cropToSquareJPEG(file: File, targetSize = 512): Promise<PendingAvatar & { previewDataUrl: string }> {
+    const objectUrl = URL.createObjectURL(file);
+    try {
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = reject;
+        el.src = objectUrl;
+      });
+
+      const side = Math.min(img.width, img.height);
+      const sx = Math.max(0, Math.floor((img.width - side) / 2));
+      const sy = Math.max(0, Math.floor((img.height - side) / 2));
+
+      const canvas = document.createElement("canvas");
+      canvas.width = targetSize;
+      canvas.height = targetSize;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas not supported");
+
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(img, sx, sy, side, side, 0, 0, targetSize, targetSize);
+
+      const blob: Blob = await new Promise((resolve, reject) =>
+        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Failed to encode image"))), "image/jpeg", 0.92)
+      );
+
+      const previewDataUrl = canvas.toDataURL("image/jpeg", 0.92);
+      const fileName = "avatar_512.jpg";
+      return { blob, fileName, previewDataUrl };
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
 
   /* preload data */
   useEffect(() => {
@@ -83,24 +125,95 @@ export default function Settings() {
         // keep mock if fail
         msgApi.error((e as Error)?.message || "Failed to load profile.");
       }
+
+      // Load avatar signed URL (keeps bucket private)
+      try {
+        const { data: userData } = await supabase.auth.getUser();
+        const uid = userData?.user?.id;
+        if (!uid) return;
+
+        const { data: prof } = await supabase
+          .from("profiles")
+          .select("avatar_url, avatar_updated_at")
+          .eq("id", uid)
+          .maybeSingle();
+
+        const path = prof?.avatar_url;
+        const updatedAt = prof?.avatar_updated_at ?? undefined;
+        if (path) {
+          const signed = await getVersionedAvatarSrc(path, updatedAt);
+          if (signed) {
+            setSavedAvatarUrl(signed);
+            setAvatarUrl(signed);
+          }
+        }
+      } catch {
+        // ignore; avatar remains placeholder if not found
+      }
     })();
   }, [msgApi]);
 
   useEffect(() => {
     profileForm.setFieldsValue(savedProfile);
-    setAvatarUrl(savedAvatarUrl);
-  }, [profileForm, savedProfile, savedAvatarUrl]);
+    // keep avatarUrl as-is (live preview) unless nothing selected
+    if (!avatarUrl && savedAvatarUrl) setAvatarUrl(savedAvatarUrl);
+  }, [profileForm, savedProfile, savedAvatarUrl, avatarUrl]);
 
   /* ───────── API handlers ───────── */
   const saveProfile = async (values: ProfileValues) => {
     setLoading(true);
     try {
-      // Persist to DB (email is read-only on backend; do not update it)
+      // Persist text fields (email is read-only on backend; do not update it)
       await updateMyProfile({
         full_name: values.fullName,
         phone: values.phone || null,
         pup_id: values.pupId || null,
       });
+
+      // If an avatar is pending, upload to private Storage and set canonical path
+      if (pendingAvatar) {
+        const { data: userData } = await supabase.auth.getUser();
+        const uid = userData?.user?.id;
+        if (!uid) throw new Error("User not authenticated.");
+
+        // canonical object path in private bucket
+        const objectPath = `${uid}/${pendingAvatar.fileName}`;
+        const { error: upErr } = await supabase.storage
+          .from("avatar")
+          .upload(objectPath, pendingAvatar.blob, {
+            contentType: "image/jpeg",
+            upsert: true,
+            cacheControl: "3600",
+          });
+        if (upErr) throw upErr;
+
+        // Persist canonical path in profiles.avatar_url
+        const canonical = `avatar/${objectPath}`;
+        const { error: updErr } = await supabase
+          .from("profiles")
+          .update({ avatar_url: canonical })
+          .eq("id", uid);
+        if (updErr) throw updErr;
+
+        // Re-fetch avatar_updated_at for proper cache-busting
+        const { data: prof2, error: selErr } = await supabase
+          .from("profiles")
+          .select("avatar_updated_at, avatar_url")
+          .eq("id", uid)
+          .single();
+        if (selErr) throw selErr;
+
+        const signed = await getVersionedAvatarSrc(
+          prof2.avatar_url ?? canonical,
+          prof2.avatar_updated_at ?? Date.now()
+        );
+        if (signed) {
+          setSavedAvatarUrl(signed);
+          setAvatarUrl(signed);
+        }
+        setPendingAvatar(undefined);
+      }
+
       msgApi.success("Profile updated successfully!");
 
       // Persist new “saved” snapshot (keep backend email mirror)
@@ -110,7 +223,6 @@ export default function Settings() {
         phone: values.phone,
         pupId: values.pupId,
       });
-      setSavedAvatarUrl(avatarUrl ?? "");
 
       setIsEditing(false);
     } catch (e) {
@@ -137,7 +249,7 @@ export default function Settings() {
 
   /* ───────── Confirm flows ───────── */
   const confirmSaveProfile = () => {
-    if (!profileForm.isFieldsTouched(true)) {
+    if (!profileForm.isFieldsTouched(true) && !pendingAvatar) {
       msgApi.info("Edit at least one field before saving.");
       return;
     }
@@ -167,13 +279,18 @@ export default function Settings() {
       onOk: () => saveSecurity(values),
     });
 
-  /* ───────── Upload (preview-only) ───────── */
+  /* ───────── Upload (preview-only UI; we do client-side square crop) ───────── */
   const uploadProps = {
-    beforeUpload: (file: File) => {
-      const reader = new FileReader();
-      reader.onload = () => setAvatarUrl(reader.result as string); // live preview
-      reader.readAsDataURL(file);
-      return false;
+    beforeUpload: async (file: File) => {
+      try {
+        // Crop to a centered square and scale to 512×512 JPEG (matches circle frame cleanly)
+        const { blob, fileName, previewDataUrl } = await cropToSquareJPEG(file, 512);
+        setPendingAvatar({ blob, fileName });
+        setAvatarUrl(previewDataUrl); // live preview
+      } catch (e) {
+        msgApi.error((e as Error)?.message || "Failed to process image.");
+      }
+      return false; // prevent antd from uploading
     },
     maxCount: 1,
     accept: "image/*",
@@ -184,6 +301,7 @@ export default function Settings() {
   const handleCancelEdit = () => {
     profileForm.setFieldsValue(savedProfile); // revert text fields
     setAvatarUrl(savedAvatarUrl);             // revert avatar
+    setPendingAvatar(undefined);              // discard pending crop
     profileForm.resetFields();                // clear validation states
     setIsEditing(false);
   };
@@ -243,7 +361,8 @@ export default function Settings() {
         {/* Action buttons */}
         <Form.Item shouldUpdate>
           {() => {
-            const untouched = !profileForm.isFieldsTouched(true);
+            const untouched =
+              !profileForm.isFieldsTouched(true) && !pendingAvatar;
             const hasError  = profileForm.getFieldsError().some(f => f.errors.length);
             const saveDisabled = untouched || hasError || loading;
 

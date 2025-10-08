@@ -37,6 +37,9 @@ import {
   type ProfileRow,
 } from "@/services/sportsDetail";
 
+/* ── Avatars (signed URLs; NO UI changes) ────────────────────────────────── */
+import { bulkSignedByUserIds } from "@/services/avatars";
+
 /* ── New: export helpers for chart → PNG/PDF/XLSX (no styling changes) ───── */
 import { toPng } from "html-to-image";
 import { saveAs } from "file-saver";
@@ -405,6 +408,20 @@ export default function SportDetail() {
   const [teamOptions, setTeamOptions] = useState<TeamGender[]>([]);
   const [team, setTeam] = useState<TeamGender | null>(null);
 
+  /* ── Signed avatar URLs (coaches/athletes) ─────────────────────────────── */
+  const [avatarById, setAvatarById] = useState<Record<string, string>>({});
+  async function refreshAvatars(ids: string[]) {
+    if (!ids?.length) return;
+    try {
+      const urls = await bulkSignedByUserIds(ids, 60 * 60 * 24);
+      if (Object.keys(urls).length) {
+        setAvatarById((prev) => ({ ...prev, ...urls }));
+      }
+    } catch {
+      /* ignore; placeholders stay */
+    }
+  }
+
   /* Keep URL synced to team change (so refresh/deep-link works) */
   useEffect(() => {
     setTeamQuery(navigate, team);
@@ -504,6 +521,13 @@ export default function SportDetail() {
 
           // Coaches list only needs names for the current UI
           nextCoaches = coachRows.map((r) => ({ id: r.id, full_name: r.full_name || "Coach" } as unknown as VCoach));
+
+          // Sign avatars for visible roster (coaches + athletes)
+          const toSign = [
+            ...coachRows.map((r) => String(r.id)).filter(Boolean),
+            ...athleteRows.map((r) => String(r.id)).filter(Boolean),
+          ];
+          await refreshAvatars(toSign);
         }
 
         if (!alive) return;
@@ -624,11 +648,15 @@ export default function SportDetail() {
   /* Fallback lists to preserve UI if live arrays are empty */
   const coachesToRender = useMemo<CoachItem[]>(() => {
     if (coaches.length) {
-      return coaches.map((c) => ({ name: c.full_name || "Coach", image: COACH_PLACEHOLDER }));
+      return coaches.map((c) => {
+        const id = (c as unknown as { id?: string }).id;
+        const src = id ? avatarById[id] : undefined;
+        return { name: c.full_name || "Coach", image: src || COACH_PLACEHOLDER };
+      });
     }
     const raw = Array.from((sport?.coaches ?? []) as ReadonlyArray<CoachItem>);
     return raw.map((x) => (typeof x === "string" ? { name: x } : x));
-  }, [coaches, sport]);
+  }, [coaches, sport, avatarById]);
 
   const athletesToRender = useMemo(() => {
     if (athletes.length) return athletes.map((a) => a.full_name || "Athlete");
