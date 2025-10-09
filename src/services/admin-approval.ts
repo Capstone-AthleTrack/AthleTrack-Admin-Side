@@ -11,13 +11,19 @@ function asError(e: unknown): Error {
 
 /* ---------------- types ---------------- */
 type Role = "admin" | "coach" | "athlete" | "user" | null;
-type Status = "pending" | "active" | "suspended" | "disabled" | null;
+
+/** Profile status in DB currently uses 'pending' | 'accepted' | 'decline' | 'disabled'.
+ *  We keep extra literals ('active' | 'suspended') for legacy tolerance in UI code. */
+type Status = "pending" | "accepted" | "decline" | "disabled" | "active" | "suspended" | null;
 
 export type LiteProfile = {
   role: Role;
   status?: Status;
   is_active?: boolean | null; // legacy compat
 };
+
+type RoleStatusRow = { role: Role | null; status: Status | null };
+type AccountRequestRow = { id: string; status: "pending" | "approved" | "denied" | null };
 
 /* -------------------------------------------------------------------------- */
 /*  Ensure/refresh a profile row AFTER email has been verified.               */
@@ -36,8 +42,10 @@ export async function postSignUpBootstrap(opts?: {
   if (!isConfirmed) return;
 
   // Minimal upsert to profiles (self row). Idempotent.
+  // NOTE: Do NOT include user_id — it's a GENERATED column in DB.
   const payload: Record<string, unknown> = {
     id: user.id,
+    email: user.email ?? null,
     // Don't force role/status here; admin approval flow will set those.
     updated_at: new Date().toISOString(),
   };
@@ -57,10 +65,11 @@ export async function postSignUpBootstrap(opts?: {
     upsertErr = error as PostgrestError | null;
   }
 
-  // If a column is missing (42703), retry with just id/updated_at/full_name
+  // If a column is missing (42703), retry with just id/email/updated_at/full_name
   if (upsertErr?.code === "42703") {
     const slim: Record<string, unknown> = {
       id: user.id,
+      email: user.email ?? null,
       updated_at: new Date().toISOString(),
     };
     if (fullName) slim["full_name"] = fullName;
@@ -73,7 +82,7 @@ export async function postSignUpBootstrap(opts?: {
 }
 
 /* -------------------------------------------------------------------------- */
-/*  File a pending admin-role request (idempotent).                           */
+/*  File a pending admin-role request (idempotent + guarded).                 */
 /*  Replaces RPC: request_admin_role                                          */
 /* -------------------------------------------------------------------------- */
 export async function submitAdminRequest(reason?: string | null) {
@@ -81,7 +90,25 @@ export async function submitAdminRequest(reason?: string | null) {
   const user = au?.user;
   if (!user) throw new Error("Not signed in");
 
-  // De-dupe: if the latest request is still pending, do nothing.
+  // Gate: only create a request if profile is truly "pending" and has no role.
+  const { data: prof, error: profErr } = await supabase
+    .from("profiles")
+    .select("role,status")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  if (profErr) throw asError(profErr);
+
+  const row = (prof ?? null) as RoleStatusRow | null;
+  const role = row?.role ?? null;
+  const status = row?.status ?? null;
+
+  // If already accepted / declined / disabled OR has any role set → skip
+  if (role || (status && status !== "pending")) {
+    return true;
+  }
+
+  // De-dupe: if the latest request is still pending (or already approved), do nothing.
   const { data: existing, error: qErr } = await supabase
     .from("account_requests")
     .select("id,status")
@@ -91,7 +118,11 @@ export async function submitAdminRequest(reason?: string | null) {
     .maybeSingle();
 
   if (qErr) throw asError(qErr);
-  if (existing && existing.status === "pending") return true;
+
+  const latest = (existing ?? null) as AccountRequestRow | null;
+  if (latest && (latest.status === "pending" || latest.status === "approved")) {
+    return true;
+  }
 
   const { error } = await supabase.from("account_requests").insert({
     user_id: user.id,
@@ -100,7 +131,7 @@ export async function submitAdminRequest(reason?: string | null) {
     desired_role: "admin",
     device_name: (typeof navigator !== "undefined" ? navigator.userAgent : "web").slice(0, 128),
     status: "pending",
-    reason: reason ?? null,
+    reason: (reason ?? "").trim() || null,
   });
 
   if (error) throw asError(error);
@@ -139,5 +170,8 @@ export async function isAdmin(): Promise<boolean> {
   const role = (prof.role ?? "user") as Role;
   const status = (prof.status ?? ((prof.is_active ? "active" : "pending") as Status)) as Status;
 
-  return role === "admin" && status === "active";
+  // Treat 'accepted' (DB), or legacy 'active', or is_active=true as "active"
+  const isActive = status === "accepted" || status === "active" || prof.is_active === true;
+
+  return role === "admin" && isActive;
 }
