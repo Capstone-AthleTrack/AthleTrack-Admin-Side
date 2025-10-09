@@ -1,4 +1,4 @@
-import { useState } from "react";  
+import { useState } from "react";   
 import { Card, Form, Input, Button, Typography, Divider, message } from "antd";
 import { MailOutlined, LockOutlined, UserOutlined } from "@ant-design/icons";
 import { BRAND } from "@/brand";
@@ -49,6 +49,8 @@ export default function SignUp() {
       // 3) If email confirmations are ON, no session will exist yet
       if (!session) {
         message.success("Check your PUP inbox to confirm your email.");
+        // Clear fields on successful sign-up (pending email confirmation)
+        form.resetFields();
         return;
       }
 
@@ -66,7 +68,9 @@ export default function SignUp() {
         /* ignore */
       }
 
+      // Success toast + clear form (email confirmations OFF path)
       message.success("Account created. Waiting for admin approval.");
+      form.resetFields();
       // No navigation change to keep UI exactly as-is
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
