@@ -1,4 +1,4 @@
-import { useState } from "react"; 
+import { useState } from "react";
 import { Card, Form, Input, Button, Typography, Divider, message } from "antd";
 import { MailOutlined, LockOutlined } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
@@ -20,7 +20,14 @@ interface SignInFormValues {
 
 /* Types to avoid `any` while staying compatible with both schemas */
 type DBRole = "admin" | "coach" | "athlete" | "user" | null;
-type DBStatus = "pending" | "accepted" | "decline" | "disabled" | "active" | "suspended" | null;
+type DBStatus =
+  | "pending"
+  | "accepted"
+  | "decline"
+  | "disabled"
+  | "active"
+  | "suspended"
+  | null;
 type ProfileCompat = {
   role: DBRole;
   status?: DBStatus;
@@ -28,17 +35,15 @@ type ProfileCompat = {
 };
 
 // Normalize mixed/legacy status values into the new set
-function normalizeStatus(s: DBStatus | string | null | undefined): "pending" | "accepted" | "decline" | "disabled" {
+function normalizeStatus(
+  s: DBStatus | string | null | undefined
+): "pending" | "accepted" | "decline" | "disabled" {
   const v = String(s ?? "").toLowerCase();
   if (v === "accepted" || v === "active") return "accepted";
   if (v === "decline" || v === "denied" || v === "suspended") return "decline";
   if (v === "disabled") return "disabled";
   return "pending";
 }
-
-// PUP domain guard (client-side convenience; DB still enforces this)
-const isPupMail = (email?: string | null) =>
-  !!email && email.toLowerCase().endsWith("@iskolarngbayan.pup.edu.ph");
 
 export default function SignIn() {
   const [form] = Form.useForm<SignInFormValues>();
@@ -64,24 +69,54 @@ export default function SignIn() {
         return;
       }
 
-      // 2) Enforce PUP webmail for admin console access
-      if (!isPupMail(user.email)) {
-        await supabase.auth.signOut();
-        message.error("PUP webmail only: @iskolarngbayan.pup.edu.ph");
-        return;
-      }
+      // 2) (No client-side domain checks here; DB/Policies handle domains)
 
-      // 3) Bootstrap claim (zero-admin or invite flow); ignore if not applicable
-      try {
-        await postSignUpBootstrap();
-      } catch {
-        /* no-op */
-      }
-
-      // 4) Check profile role/status (supports both `status` and legacy `is_active`)
+      // 3) Load current profile FIRST so we never upsert a wrong role
       const profRaw = await getMyProfile();
       const prof = (profRaw ?? null) as ProfileCompat | null;
 
+      // Pull possible metadata we can mirror into profiles on first login
+      const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
+      const metaFullName =
+        (typeof meta.full_name === "string" && meta.full_name) ||
+        (typeof meta.fullName === "string" && meta.fullName) ||
+        "";
+      const metaPupId =
+        (typeof meta.pup_id === "string" && meta.pup_id) ||
+        (typeof meta.pupId === "string" && meta.pupId) ||
+        "";
+
+      // 3a) Record device without touching role/status (avoid on_conflict errors).
+      //     If profile doesn't exist yet, also persist email, full_name, pup_id from metadata.
+      try {
+        if (prof) {
+          // Safe UPDATE path – DO NOT set role/status here
+          const patch: Record<string, unknown> = { last_signup_device: "web" };
+          if (metaFullName) patch.full_name = metaFullName;
+          if (metaPupId) patch.pup_id = metaPupId;
+          await supabase.from("profiles").update(patch).eq("id", user.id);
+        } else {
+          // Profile missing (rare for admins) → do a minimal upsert with NO role
+          const row: Record<string, unknown> = {
+            id: user.id,
+            email: (user.email ?? "").toLowerCase(),
+            last_signup_device: "web",
+          };
+          if (metaFullName) row.full_name = metaFullName;
+          if (metaPupId) row.pup_id = metaPupId;
+          await supabase.from("profiles").upsert(row, { onConflict: "id" });
+          // If your bootstrap flow is required elsewhere, keep it behind the guard:
+          try {
+            await postSignUpBootstrap();
+          } catch {
+            /* no-op */
+          }
+        }
+      } catch {
+        // Never block sign-in on this bookkeeping write
+      }
+
+      // 4) Check profile role/status (supports both `status` and legacy `is_active`)
       const role: DBRole = prof?.role ?? "user";
       const statusNormalized = normalizeStatus(
         prof?.status ?? (prof?.is_active ? "accepted" : "pending")
@@ -102,7 +137,7 @@ export default function SignIn() {
         return;
       }
 
-      // 5) Admin & accepted → proceed (telemetry removed to avoid 400s)
+      // 5) Admin & accepted → proceed
       navigate("/dashboard");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -158,14 +193,14 @@ export default function SignIn() {
       </div>
 
       {/* right side - sign in */}
-      <div className="relative flex items-center justify-center bg-gradient-to-b from-white to-[#fff8cc] px-4 sm:px-6">
+      <div className="relative flex items-center justify-center bg-gradient-to-b from-white to-[#fff7d6] px-4 sm:px-6">
         {/* corner dots */}
         <div className="absolute top-4 right-4 flex gap-1" aria-hidden>
           <span
             className="w-2 h-2 rounded-full"
             style={{ background: BRAND.maroon }}
           />
-        <span
+          <span
             className="w-2 h-2 rounded-full"
             style={{ background: BRAND.yellow }}
           />
@@ -233,9 +268,7 @@ export default function SignIn() {
             </Form.Item>
 
             <Form.Item
-              label={
-                <span className="text-[17px] font-medium">Password</span>
-              }
+              label={<span className="text-[17px] font-medium">Password</span>}
               name="password"
               rules={[{ required: true, message: "Password is required" }]}
               style={{ marginBottom: 14 }}

@@ -20,8 +20,11 @@ import Settings from "./pages/Settings";
 /* ── shared supabase singleton ── */
 import supabase from "@/core/supabase";
 
-const isPupMail = (email?: string | null) =>
-  !!email && email.toLowerCase().endsWith("@iskolarngbayan.pup.edu.ph");
+/* Require ONLY official PUP staff domain for admin-side access */
+const isPupMail = (email?: string | null) => {
+  const e = (email ?? "").toLowerCase();
+  return e.endsWith("@pup.edu.ph");
+};
 
 type ProfileRowLite = {
   role: "admin" | "coach" | "athlete" | "user" | null;

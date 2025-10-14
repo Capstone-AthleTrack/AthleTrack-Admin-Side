@@ -5,9 +5,32 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 export const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string) || '';
 export const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || '';
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error('Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY');
+function assertValidEnv() {
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error(
+      '[supabase] Missing VITE_SUPABASE_URL and/or VITE_SUPABASE_ANON_KEY.\n' +
+        'Add them in .env.local (Project settings → API in Supabase dashboard).'
+    );
+  }
+  // Must be a hosted Supabase project like https://xxxx.supabase.co
+  let host = '';
+  try {
+    const u = new URL(supabaseUrl);
+    host = u.host;
+  } catch {
+    throw new Error(
+      `[supabase] VITE_SUPABASE_URL is not a valid URL: "${supabaseUrl}". ` +
+        'Use your project URL like "https://<project-ref>.supabase.co".'
+    );
+  }
+  if (!/\.supabase\.co$/i.test(host)) {
+    throw new Error(
+      `[supabase] VITE_SUPABASE_URL must point to your Supabase project (https://<ref>.supabase.co), ` +
+        `but is "${supabaseUrl}". If you see requests to http://localhost:5173/functions, this is the cause.`
+    );
+  }
 }
+assertValidEnv();
 
 // ---- HMR-safe globals (avoid multiple GoTrue clients in dev) ---------------
 declare global {
@@ -25,16 +48,11 @@ const _supabase: SupabaseClient =
       autoRefreshToken: true,
       detectSessionInUrl: true,
     },
-    // Belt & suspenders: ensure apikey is always present on REST calls
-    // (supabase-js adds it by default, this guarantees it even if customized)
+    // Ensure API key is always present on REST/Functions calls
     global: {
-      headers: {
-        apikey: supabaseAnonKey,
-      },
+      headers: { apikey: supabaseAnonKey },
     },
-    db: {
-      schema: 'public',
-    },
+    db: { schema: 'public' },
   });
 
 if (!globalThis.__athletrack_supabase__) {
