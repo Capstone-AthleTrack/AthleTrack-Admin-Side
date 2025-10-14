@@ -1,9 +1,9 @@
-import { useState } from "react";   
+import { useState } from "react";    
 import { Card, Form, Input, Button, Typography, Divider, message } from "antd";
 import { MailOutlined, LockOutlined, UserOutlined } from "@ant-design/icons";
 import { BRAND } from "@/brand";
-import supabase from "@/core/supabase";
 import { postSignUpBootstrap, submitAdminRequest } from "@/services/admin-approval";
+import { supabaseUrl, supabaseAnonKey } from "@/core/supabase";
 
 interface SignUpFormValues {
   fullName: string;
@@ -13,8 +13,9 @@ interface SignUpFormValues {
   confirm: string;
 }
 
-const isPupMail = (email?: string | null) =>
-  !!email && email.toLowerCase().endsWith("@iskolarngbayan.pup.edu.ph");
+type CreateAdminResponse =
+  | { ok: true; id: string }
+  | { error: string };
 
 export default function SignUp() {
   const [form] = Form.useForm<SignUpFormValues>();
@@ -24,54 +25,49 @@ export default function SignUp() {
     try {
       setLoading(true);
 
-      // 1) Client-side PUP email guard (server/DB still enforce domain later)
-      if (!isPupMail(values.email)) {
-        message.error("PUP webmail only: @iskolarngbayan.pup.edu.ph");
-        return;
-      }
-
-      // 2) Sign up in Supabase; store full name in user metadata
-      const { data, error } = await supabase.auth.signUp({
-        email: values.email,
-        password: values.password,
-        options: {
-          data: { full_name: values.fullName, pup_id: values.pupId },
+      // Create admin via secure Edge Function (no direct browser sign-up for admins)
+      // Use ABSOLUTE Supabase URL to avoid relative /functions calls to the app origin.
+      const resp = await fetch(`${supabaseUrl}/functions/v1/create_admin`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          // Send anon key for browser-invoked Edge Functions
+          Authorization: `Bearer ${supabaseAnonKey}`,
+          apikey: supabaseAnonKey,
         },
+        body: JSON.stringify({
+          fullName: values.fullName,
+          pupId: values.pupId,
+          email: values.email,
+          password: values.password,
+        }),
       });
 
-      if (error) {
-        message.error(error.message || "Sign-up failed");
+      let data: CreateAdminResponse | null = null;
+      try {
+        data = (await resp.json()) as CreateAdminResponse;
+      } catch {
+        data = null;
+      }
+
+      if (!resp.ok) {
+        const err =
+          data && typeof data === "object" && "error" in data
+            ? (data as { error: string }).error
+            : `Failed to create admin (HTTP ${resp.status})`;
+        message.error(err);
         return;
       }
 
-      const session = data.session;
-
-      // 3) If email confirmations are ON, no session will exist yet
-      if (!session) {
-        message.success("Check your PUP inbox to confirm your email.");
-        // Clear fields on successful sign-up (pending email confirmation)
-        form.resetFields();
-        return;
-      }
-
-      // 4) If a session exists (confirm disabled or magic link), run bootstrap
-      try {
-        await postSignUpBootstrap(); // handles zero-admin OR invite=? token if present
-      } catch {
-        /* ignore */
-      }
-
-      // 5) File/ensure a pending admin request (quietly). Approval happens in Requests view.
-      try {
-        await submitAdminRequest();
-      } catch {
-        /* ignore */
-      }
-
-      // Success toast + clear form (email confirmations OFF path)
-      message.success("Account created. Waiting for admin approval.");
+      // Success: account created server-side; profile upserted with role=admin & device=web
+      // Keep UI behavior the same: toast + clear fields, no navigation change
+      message.success("Admin created. You may now sign in.");
       form.resetFields();
-      // No navigation change to keep UI exactly as-is
+
+      // (Optional legacy hooks kept as no-ops to preserve flow if you later re-enable them)
+      try { await postSignUpBootstrap(); } catch { /* ignore */ }
+      try { await submitAdminRequest();   } catch { /* ignore */ }
+
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       message.error(msg);
@@ -155,150 +151,150 @@ export default function SignUp() {
             </Typography.Text>
           </div>
 
-          <Divider style={{ margin: "12px 0 18px" }} />
+        <Divider style={{ margin: "12px 0 18px" }} />
 
-          <Form form={form} layout="vertical" onFinish={onFinish} requiredMark={false}>
-            <Form.Item
-              label={<span className="text-[17px] font-medium">Full Name</span>}
-              name="fullName"
-              rules={[{ required: true, message: "Full name is required" }]}
-              style={{ marginBottom: 14 }}
-            >
-              <Input
-                size="large"
-                prefix={<UserOutlined className="text-black/40 mr-1" />}
-                placeholder="Juan Dela Cruz"
-                className="rounded-xl"
-                style={{
-                  background: "#FFE681",
-                  borderRadius: 6,
-                  height: 38,
-                  borderColor: "transparent",
-                }}
-              />
-            </Form.Item>
-
-            <Form.Item
-              label={<span className="text-[17px] font-medium">PUP ID</span>}
-              name="pupId"
-              rules={[{ required: true, message: "PUP ID is required" }]}
-              style={{ marginBottom: 14 }}
-            >
-              <Input
-                size="large"
-                prefix={<UserOutlined className="text-black/40 mr-1" />}
-                placeholder="e.g., 20XX-12345-MN-0"
-                className="rounded-xl"
-                style={{
-                  background: "#FFE681",
-                  borderRadius: 6,
-                  height: 38,
-                  borderColor: "transparent",
-                }}
-              />
-            </Form.Item>
-
-            <Form.Item
-              label={<span className="text-[17px] font-medium">Email Address</span>}
-              name="email"
-              rules={[
-                { required: true, message: "Email is required" },
-                { type: "email", message: "Enter a valid email" },
-              ]}
-              style={{ marginBottom: 14 }}
-            >
-              <Input
-                size="large"
-                prefix={<MailOutlined className="text-black/40 mr-1" />}
-                placeholder="you@athletrack.com"
-                className="rounded-xl"
-                style={{
-                  background: "#FFE681",
-                  borderRadius: 6,
-                  height: 38,
-                  borderColor: "transparent",
-                }}
-              />
-            </Form.Item>
-
-            <Form.Item
-              label={<span className="text-[17px] font-medium">Password</span>}
-              name="password"
-              rules={[{ required: true, message: "Password is required" }]}
-              style={{ marginBottom: 14 }}
-            >
-              <Input.Password
-                size="large"
-                prefix={<LockOutlined className="text-black/40 mr-1" />}
-                placeholder="••••••••"
-                className="rounded-xl"
-                style={{
-                  background: "#FFE681",
-                  borderRadius: 6,
-                  height: 38,
-                  borderColor: "transparent",
-                }}
-              />
-            </Form.Item>
-
-            <Form.Item
-              label={<span className="text-[17px] font-medium">Confirm Password</span>}
-              name="confirm"
-              dependencies={["password"]}
-              rules={[
-                { required: true, message: "Please confirm your password" },
-                ({ getFieldValue }) => ({
-                  validator(_, value) {
-                    if (!value || getFieldValue("password") === value) return Promise.resolve();
-                    return Promise.reject(new Error("Passwords do not match"));
-                  },
-                }),
-              ]}
-              style={{ marginBottom: 18 }}
-            >
-              <Input.Password
-                size="large"
-                prefix={<LockOutlined className="text-black/40 mr-1" />}
-                placeholder="••••••••"
-                className="rounded-xl"
-                style={{
-                  background: "#FFE681",
-                  borderRadius: 6,
-                  height: 38,
-                  borderColor: "transparent",
-                }}
-              />
-            </Form.Item>
-
-            <Button
-              htmlType="submit"
-              type="primary"
-              className="w-full !h-11 !rounded-full flex items-center justify-center"
+        <Form form={form} layout="vertical" onFinish={onFinish} requiredMark={false}>
+          <Form.Item
+            label={<span className="text-[17px] font-medium">Full Name</span>}
+            name="fullName"
+            rules={[{ required: true, message: "Full name is required" }]}
+            style={{ marginBottom: 14 }}
+          >
+            <Input
+              size="large"
+              prefix={<UserOutlined className="text-black/40 mr-1" />}
+              placeholder="Juan Dela Cruz"
+              className="rounded-xl"
               style={{
-                fontSize: "17px",
-                fontWeight: 600,
-                background: BRAND.maroon,
-                border: "none",
-                boxShadow: "0 8px 14px rgba(128,0,0,0.25)",
+                background: "#FFE681",
+                borderRadius: 6,
+                height: 38,
+                borderColor: "transparent",
               }}
-              loading={loading}
+            />
+          </Form.Item>
+
+          <Form.Item
+            label={<span className="text-[17px] font-medium">PUP ID</span>}
+            name="pupId"
+            rules={[{ required: true, message: "PUP ID is required" }]}
+            style={{ marginBottom: 14 }}
+          >
+            <Input
+              size="large"
+              prefix={<UserOutlined className="text-black/40 mr-1" />}
+              placeholder="e.g., 20XX-12345-MN-0"
+              className="rounded-xl"
+              style={{
+                background: "#FFE681",
+                borderRadius: 6,
+                height: 38,
+                borderColor: "transparent",
+              }}
+            />
+          </Form.Item>
+
+          <Form.Item
+            label={<span className="text-[17px] font-medium">Email Address</span>}
+            name="email"
+            rules={[
+              { required: true, message: "Email is required" },
+              { type: "email", message: "Enter a valid email" },
+            ]}
+            style={{ marginBottom: 14 }}
+          >
+            <Input
+              size="large"
+              prefix={<MailOutlined className="text-black/40 mr-1" />}
+              placeholder="you@athletrack.com"
+              className="rounded-xl"
+              style={{
+                background: "#FFE681",
+                borderRadius: 6,
+                height: 38,
+                borderColor: "transparent",
+              }}
+            />
+          </Form.Item>
+
+          <Form.Item
+            label={<span className="text-[17px] font-medium">Password</span>}
+            name="password"
+            rules={[{ required: true, message: "Password is required" }]}
+            style={{ marginBottom: 14 }}
+          >
+            <Input.Password
+              size="large"
+              prefix={<LockOutlined className="text-black/40 mr-1" />}
+              placeholder="••••••••"
+              className="rounded-xl"
+              style={{
+                background: "#FFE681",
+                borderRadius: 6,
+                height: 38,
+                borderColor: "transparent",
+              }}
+            />
+          </Form.Item>
+
+          <Form.Item
+            label={<span className="text-[17px] font-medium">Confirm Password</span>}
+            name="confirm"
+            dependencies={["password"]}
+            rules={[
+              { required: true, message: "Please confirm your password" },
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (!value || getFieldValue("password") === value) return Promise.resolve();
+                  return Promise.reject(new Error("Passwords do not match"));
+                },
+              }),
+            ]}
+            style={{ marginBottom: 18 }}
+          >
+            <Input.Password
+              size="large"
+              prefix={<LockOutlined className="text-black/40 mr-1" />}
+              placeholder="••••••••"
+              className="rounded-xl"
+              style={{
+                background: "#FFE681",
+                borderRadius: 6,
+                height: 38,
+                borderColor: "transparent",
+              }}
+            />
+          </Form.Item>
+
+          <Button
+            htmlType="submit"
+            type="primary"
+            className="w-full !h-11 !rounded-full flex items-center justify-center"
+            style={{
+              fontSize: "17px",
+              fontWeight: 600,
+              background: BRAND.maroon,
+              border: "none",
+              boxShadow: "0 8px 14px rgba(128,0,0,0.25)",
+            }}
+            loading={loading}
+          >
+            Create Account
+          </Button>
+
+          <Divider style={{ margin: "18px 0 10px" }} />
+
+          <div className="text-center mt-3 text-xs" style={{ fontSize: "15px" }}>
+            Already have an account?{" "}
+            <a
+              href="/sign-in"
+              className="font-semibold hover:underline"
+              style={{ color: BRAND.maroon, fontSize: "15px" }}
             >
-              Create Account
-            </Button>
-
-            <Divider style={{ margin: "18px 0 10px" }} />
-
-            <div className="text-center mt-3 text-xs" style={{ fontSize: "15px" }}>
-              Already have an account?{" "}
-              <a
-                href="/sign-in"
-                className="font-semibold hover:underline"
-                style={{ color: BRAND.maroon, fontSize: "15px" }}
-              >
-                Back to sign in.
-              </a>
-            </div>
-          </Form>
+              Back to sign in.
+            </a>
+          </div>
+        </Form>
         </Card>
       </div>
     </div>

@@ -1,13 +1,17 @@
 import { Navigate } from 'react-router-dom';
 import { useEffect, useState, type ReactNode } from 'react';
-import { supabase } from '@/core/supabase';
 import type { User } from '@supabase/supabase-js';
+
+/* Use the same default import style as the rest of the app (e.g., SignIn.tsx) */
+import supabase from '@/core/supabase';
 
 type ProfileGateRow = {
   id?: string | null;
   email?: string | null;
   role: 'admin' | 'coach' | 'athlete' | 'user' | null;
   status: string | null;
+  /** legacy boolean used by older builds */
+  is_active?: boolean | null;
 } | null;
 
 export default function ProtectedRoute({ children }: { children: ReactNode }) {
@@ -63,14 +67,15 @@ export default function ProtectedRoute({ children }: { children: ReactNode }) {
 
       const decide = (p: ProfileGateRow | null) => {
         const isAdmin = (p?.role ?? 'user') === 'admin';
-        return isAdmin && isAllowedStatus(p?.status);
+        const okStatus = isAllowedStatus(p?.status) || !!p?.is_active; // accept legacy is_active=true
+        return isAdmin && okStatus;
       };
 
       // 1) Try by auth user id
       try {
         const { data: byId, error: errId } = await supabase
           .from('profiles')
-          .select('id,email,role,status')
+          .select('id,email,role,status,is_active')
           .eq('id', user.id)
           .maybeSingle<ProfileGateRow>();
 
@@ -82,7 +87,7 @@ export default function ProtectedRoute({ children }: { children: ReactNode }) {
           setChecking(false);
           // Debug: comment out if you don't want logs
           console.info('[ProtectedRoute] decision (by id)', {
-            uid: user.id, role: byId?.role, status: byId?.status, ok
+            uid: user.id, role: byId?.role, status: byId?.status, is_active: byId?.is_active, ok
           });
           return;
         }
@@ -96,7 +101,7 @@ export default function ProtectedRoute({ children }: { children: ReactNode }) {
         if (email) {
           const { data: byEmail, error: errEmail } = await supabase
             .from('profiles')
-            .select('id,email,role,status')
+            .select('id,email,role,status,is_active')
             .eq('email', email) // citext equality is case-insensitive
             .maybeSingle<ProfileGateRow>();
 
@@ -107,7 +112,7 @@ export default function ProtectedRoute({ children }: { children: ReactNode }) {
             setAllowed(ok);
             setChecking(false);
             console.info('[ProtectedRoute] decision (by email)', {
-              email, role: byEmail?.role, status: byEmail?.status, ok
+              email, role: byEmail?.role, status: byEmail?.status, is_active: byEmail?.is_active, ok
             });
             return;
           }
