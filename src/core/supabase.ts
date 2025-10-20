@@ -62,6 +62,34 @@ if (!globalThis.__athletrack_supabase__) {
     `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+/* ---------- DEV-ONLY DIAGNOSTICS: trace any signOut caller ---------- */
+type SignOutScope = 'others' | 'global' | 'current';
+type ScopedSignOut = (opts?: { scope?: SignOutScope }) => Promise<unknown>;
+
+if (import.meta.env.DEV) {
+  const auth = _supabase.auth as unknown as {
+    signOut?: ScopedSignOut;
+    onAuthStateChange: typeof _supabase.auth.onAuthStateChange;
+  };
+  const original = auth.signOut?.bind(_supabase.auth) as ScopedSignOut | undefined;
+
+  if (original) {
+    auth.signOut = async (opts) => {
+      console.groupCollapsed('[auth] signOut called', opts ?? {});
+      console.trace();
+      console.groupEnd();
+      return original(opts);
+    };
+  }
+
+  _supabase.auth.onAuthStateChange((event, session) => {
+    console.log('[auth] state:', event, {
+      uid: session?.user?.id,
+      email: session?.user?.email,
+    });
+  });
+}
+
 // 🔹 Named + default export (some files might use either)
 export const supabase = _supabase;
 
