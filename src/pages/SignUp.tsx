@@ -1,5 +1,5 @@
-import { useState } from "react";    
-import { Card, Form, Input, Button, Typography, Divider, message } from "antd";
+import { useState } from "react";     
+import { Card, Form, Input, Button, Typography, Divider, App as AntdApp } from "antd";
 import { MailOutlined, LockOutlined, UserOutlined } from "@ant-design/icons";
 import { BRAND } from "@/brand";
 import { postSignUpBootstrap, submitAdminRequest } from "@/services/admin-approval";
@@ -17,13 +17,26 @@ type CreateAdminResponse =
   | { ok: true; id: string }
   | { error: string };
 
+// Gmail-only helper (client-side validation)
+const isGmail = (e?: string | null) =>
+  !!e && e.toLowerCase().trim().endsWith("@gmail.com");
+
 export default function SignUp() {
   const [form] = Form.useForm<SignUpFormValues>();
   const [loading, setLoading] = useState(false);
+  // AntD v5 context-bound message API so toasts render
+  const { message } = AntdApp.useApp();
 
   async function handleSignUp(values: SignUpFormValues) {
     try {
       setLoading(true);
+
+      // Basic Gmail-only guard (nice UX; DB/Edge enforces this as well)
+      const email = (values.email ?? "").trim().toLowerCase();
+      if (!isGmail(email)) {
+        message.error("Please use a @gmail.com address.");
+        return;
+      }
 
       // Create admin via secure Edge Function (no direct browser sign-up for admins)
       // Use ABSOLUTE Supabase URL to avoid relative /functions calls to the app origin.
@@ -38,7 +51,7 @@ export default function SignUp() {
         body: JSON.stringify({
           fullName: values.fullName,
           pupId: values.pupId,
-          email: values.email,
+          email, // normalized to lowercase
           password: values.password,
         }),
       });
@@ -130,10 +143,12 @@ export default function SignUp() {
 
         <Card
           className="w-[min(92vw,480px)] shadow-2xl rounded-2xl border-0"
-          bodyStyle={{
-            padding: 28,
-            background: "linear-gradient(180deg,#ffffff,#fff7d6)",
-            borderRadius: 16,
+          styles={{
+            body: {
+              padding: 28,
+              background: "linear-gradient(180deg,#ffffff,#fff7d6)",
+              borderRadius: 16,
+            },
           }}
         >
           <div className="flex flex-col items-center text-center mb-3">

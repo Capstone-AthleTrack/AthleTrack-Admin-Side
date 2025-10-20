@@ -28,7 +28,8 @@ import { getMyProfile, updateMyProfile } from "@/services/profile";
 import { changePassword } from "@/services/authSecurity";
 
 /* ── storage/signing (no UI change) ── */
-import { supabase } from "@/core/supabase";
+/* IMPORTANT: use the same default import style app-wide to avoid duplicate clients */
+import supabase from "@/core/supabase";
 import { getVersionedAvatarSrc } from "@/services/avatars";
 
 const { Item } = Form;

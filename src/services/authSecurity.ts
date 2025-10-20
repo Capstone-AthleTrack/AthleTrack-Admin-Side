@@ -1,11 +1,15 @@
-// src/services/authSecurity.ts
-import { supabase } from "@/core/supabase";
+// src/services/authSecurity.tsx
+import supabase from "@/core/supabase";
 
 /** Optional scope supported by newer Supabase JS versions */
 type SignOutScope = "others" | "global" | "current";
 
 /** Narrow type for a possibly scoped signOut method in newer SDKs */
 type MaybeScopedSignOut = (opts?: { scope?: SignOutScope }) => Promise<unknown>;
+
+/** Gmail-only helper */
+const isGmail = (e?: string | null) =>
+  !!e && e.toLowerCase().trim().endsWith("@gmail.com");
 
 /**
  * Re-authenticates with the current password, then updates to the new password.
@@ -21,6 +25,11 @@ export async function changePassword(params: {
   if (userErr) throw new Error(userErr.message || "Unable to read current user.");
   const email = userRes?.user?.email;
   if (!email) throw new Error("No signed-in user.");
+
+  // Gmail-only guard (client-side UX; DB also enforces)
+  if (!isGmail(email)) {
+    throw new Error("Only @gmail.com accounts are allowed.");
+  }
 
   // 2) Re-authenticate with current password
   const { error: reauthErr } = await supabase.auth.signInWithPassword({

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Card, Form, Input, Button, Typography, Divider, message } from "antd";
+import { useState } from "react";   
+import { Card, Form, Input, Button, Typography, Divider, App as AntdApp } from "antd";
 import { MailOutlined, LockOutlined } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
 import { BRAND } from "@/brand";
@@ -45,17 +45,30 @@ function normalizeStatus(
   return "pending";
 }
 
+// Gmail-only helper (client-side validation)
+const isGmail = (e?: string | null) =>
+  !!e && e.toLowerCase().trim().endsWith("@gmail.com");
+
 export default function SignIn() {
   const [form] = Form.useForm<SignInFormValues>();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
+  // AntD v5 context-bound message API (so toasts actually render)
+  const { message } = AntdApp.useApp();
 
   async function handleSignIn(values: SignInFormValues) {
     setLoading(true);
     try {
+      // 0) Basic Gmail-only guard (nice UX; DB also enforces this)
+      const email = (values.email ?? "").trim().toLowerCase();
+      if (!isGmail(email)) {
+        message.error("Please use a @gmail.com address.");
+        return;
+      }
+
       // 1) Sign in with Supabase
       const { data, error } = await supabase.auth.signInWithPassword({
-        email: values.email,
+        email,
         password: values.password,
       });
       if (error) {
@@ -69,7 +82,12 @@ export default function SignIn() {
         return;
       }
 
-      // 2) (No client-side domain checks here; DB/Policies handle domains)
+      // Extra defense: if somehow not gmail, end session gracefully
+      if (!isGmail(user.email ?? "")) {
+        await supabase.auth.signOut();
+        message.error("Only @gmail.com addresses are allowed.");
+        return;
+      }
 
       // 3) Load current profile FIRST so we never upsert a wrong role
       const profRaw = await getMyProfile();
@@ -135,6 +153,19 @@ export default function SignIn() {
         message.info("Your account is pending admin approval.");
         // Stay on sign-in page; do not navigate to dashboard.
         return;
+      }
+
+      // 4a) Tiny stabilization step: wait until session is fully hydrated before navigating,
+      // to avoid any race with components that read the session immediately.
+      try {
+        let tries = 0;
+        for (; tries < 5; tries++) {
+          const { data: s } = await supabase.auth.getSession();
+          if (s.session?.user?.id) break;
+          await new Promise((r) => setTimeout(r, 150));
+        }
+      } catch {
+        /* ignore */
       }
 
       // 5) Admin & accepted → proceed
@@ -209,10 +240,12 @@ export default function SignIn() {
 
         <Card
           className="w-[min(92vw,480px)] shadow-2xl rounded-2xl border-0"
-          bodyStyle={{
-            padding: 28,
-            background: "linear-gradient(180deg,#ffffff,#fff7d6)",
-            borderRadius: 16,
+          styles={{
+            body: {
+              padding: 28,
+              background: "linear-gradient(180deg,#ffffff,#fff7d6)",
+              borderRadius: 16,
+            },
           }}
         >
           <div className="flex flex-col items-center text-center mb-3">

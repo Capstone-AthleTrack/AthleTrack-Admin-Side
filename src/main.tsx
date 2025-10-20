@@ -1,11 +1,19 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
-import { ConfigProvider, theme } from "antd";
+import { ConfigProvider, theme, App as AntdApp } from "antd";
 import App from "./App";
 import "./styles/tailwind.css";
 import "antd/dist/reset.css";
 import { BRAND } from "./brand";
+
+/**
+ * NOTE:
+ * We removed the eager sign-out guard from here to avoid race conditions
+ * that were logging users out immediately after a successful sign-in.
+ * Gmail-only gating now lives in <ProtectedRoute />, which decides access
+ * without force-closing the session from this global entrypoint.
+ */
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
@@ -21,9 +29,12 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         algorithm: theme.defaultAlgorithm,
       }}
     >
-      <BrowserRouter>
+      {/* Ant Design context provider so message/notification use the theme and render properly */}
+      <AntdApp>
+        <BrowserRouter>
           <App />
-      </BrowserRouter>
+        </BrowserRouter>
+      </AntdApp>
     </ConfigProvider>
   </React.StrictMode>
 );
