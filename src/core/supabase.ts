@@ -1,4 +1,4 @@
-// src/core/supabase.ts
+// src/core/supabase.ts 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 // ---- Env (Vite) ------------------------------------------------------------
@@ -95,6 +95,32 @@ export const supabase = _supabase;
 
 export function getClientId(): string {
   return globalThis.__athletrack_supabase_id__ ?? 'uninitialized';
+}
+
+/* ---------- Helpers for Edge Functions (absolute URL + headers) ---------- */
+/**
+ * Build the absolute URL to a Supabase Edge Function by name.
+ * Example: getFunctionUrl('create_user') -> https://<ref>.supabase.co/functions/v1/create_user
+ */
+export function getFunctionUrl(name: string): string {
+  return `${supabaseUrl}/functions/v1/${name}`;
+}
+
+/**
+ * Returns headers appropriate for calling Edge Functions from the browser.
+ * - Always includes `apikey` (required by Supabase)
+ * - Includes `Authorization: Bearer <user JWT>` when signed in
+ * - Falls back to `Authorization: Bearer <anon key>` when not signed in
+ */
+export async function getFunctionHeaders(extra?: Record<string, string>) {
+  const { data } = await _supabase.auth.getSession();
+  const token = data.session?.access_token || supabaseAnonKey;
+  return {
+    'Content-Type': 'application/json',
+    apikey: supabaseAnonKey,
+    Authorization: `Bearer ${token}`,
+    ...(extra ?? {}),
+  };
 }
 
 export default supabase;

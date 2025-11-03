@@ -149,7 +149,7 @@ export default function RequestManagement() {
         .from("account_requests")
         .select(selectFull)
         .order("created_at", { ascending: false })
-        .range(0, 199);
+        .range(0, 199); // <-- FIXED: single dot before range
 
       if (resp.error) {
         // attempt 2 — minimal base columns (handles schema drift)
@@ -173,7 +173,7 @@ export default function RequestManagement() {
           const fallbackRows = (fb.data ?? []) as FallbackProfile[];
           const mappedFromProfiles: RequestItem[] = fallbackRows.map((p) => ({
             id: p.id,
-            kind: "AthleteRequests",
+            kind: "Users",
             name: p.full_name || "",
             email: p.email || undefined,
             deviceName: undefined,
@@ -202,6 +202,41 @@ export default function RequestManagement() {
 
       const rows = (Array.isArray(rowsRaw) ? rowsRaw : []) as unknown as DbReqRow[];
 
+      // 🔁 Soft fallback if table exists but has 0 rows (show pending profiles)
+      if (!rows.length) {
+        const fb2 = await supabase
+          .from("profiles")
+          .select("id,full_name,email,updated_at,role,status")
+          .eq("status", "pending")
+          .order("updated_at", { ascending: false })
+          .range(0, 199);
+
+        if (!fb2.error) {
+          const pendingProfiles = (fb2.data ?? []) as FallbackProfile[];
+          const mappedFromProfiles: RequestItem[] = pendingProfiles.map((p) => ({
+            id: p.id,
+            kind: "Users",
+            name: p.full_name || "",
+            email: p.email || undefined,
+            deviceName: undefined,
+            issuedAt: p.updated_at || new Date().toISOString(),
+            status: "Pending",
+            reason: "",
+            extra: {
+              userId: p.id,
+              role: p.role
+                ? `${String(p.role).charAt(0).toUpperCase()}${String(p.role).slice(1)}`
+                : "Athlete",
+            },
+          }));
+          setData(mappedFromProfiles);
+          setSelectedId((prev) =>
+            prev && !mappedFromProfiles.find((m) => m.id === prev) ? null : prev
+          );
+          return;
+        }
+      }
+
       // fetch names of deciding admins (if any)
       const adminIds = Array.from(
         new Set(rows.map((r) => r.decided_by).filter((v): v is string => !!v))
@@ -226,7 +261,7 @@ export default function RequestManagement() {
 
       const mapped: RequestItem[] = rows.map((r) => ({
         id: r.id,
-        kind: "AthleteRequests",
+        kind: "Users",
         name: r.full_name || "",
         email: r.email || undefined,
         deviceName: r.device_name || undefined,
@@ -273,7 +308,7 @@ export default function RequestManagement() {
 
   const list = useMemo(() => {
     return data
-      .filter((d) => d.kind === "AthleteRequests")
+      .filter((d) => d.kind === "Users")
       .filter((d) => (filter === "All" ? true : d.status === (filter as ReqStatus)))
       .filter((d) =>
         query.trim()
@@ -306,6 +341,34 @@ export default function RequestManagement() {
       const decidedBy = auth?.user?.id ?? null;
       const decidedAt = new Date().toISOString();
 
+      // 🔎 Determine the real account_requests row id (fallback if we built the list from profiles)
+      let requestId = id;
+      {
+        const { data: reqById, error: ridErr } = await supabase
+          .from("account_requests")
+          .select("id,status")
+          .eq("id", id)
+          .maybeSingle();
+
+        if (ridErr) throw ridErr;
+
+        if (!reqById) {
+          const { data: reqByUser, error: rbuErr } = await supabase
+            .from("account_requests")
+            .select("id,status")
+            .eq("user_id", item.extra?.userId ?? "")
+            .order("created_at", { ascending: false })
+            .maybeSingle();
+
+          if (rbuErr) throw rbuErr;
+          if (!reqByUser) {
+            message.error("No pending request record found for this user.");
+            return;
+          }
+          requestId = reqByUser.id;
+        }
+      }
+
       if (status === "Accepted") {
         // First, mark the request approved (if the table lacks some columns, retry with a minimal update)
         const tryApprove = async () => {
@@ -317,7 +380,7 @@ export default function RequestManagement() {
               decided_by: decidedBy,
               decided_at: decidedAt,
             })
-            .eq("id", id)
+            .eq("id", requestId)
             .eq("status", "pending");
           if (e1) {
             // minimal update fallback (for schemas without decided_by/decided_at)
@@ -327,7 +390,7 @@ export default function RequestManagement() {
                 status: "approved",
                 reason: cleanReason,
               })
-              .eq("id", id)
+              .eq("id", requestId)
               .eq("status", "pending");
             if (eMin) throw eMin;
           }
@@ -353,7 +416,7 @@ export default function RequestManagement() {
             decided_by: decidedBy,
             decided_at: decidedAt,
           })
-          .eq("id", id)
+          .eq("id", requestId)
           .eq("status", "pending");
         if (e3) {
           // minimal fallback if columns are missing
@@ -363,7 +426,7 @@ export default function RequestManagement() {
               status: "denied",
               reason: cleanReason,
             })
-            .eq("id", id)
+            .eq("id", requestId)
             .eq("status", "pending");
           if (eMin2) throw eMin2;
         }
@@ -399,7 +462,7 @@ export default function RequestManagement() {
               <Input
                 allowClear
                 prefix={<SearchOutlined />}
-                placeholder="Search athlete requests..."
+                placeholder="Search user requests..."
                 onChange={(e) => setQuery(e.target.value)}
                 className="bg-white rounded-lg"
               />
@@ -419,7 +482,7 @@ export default function RequestManagement() {
           </div>
 
           <div className="px-4 pb-2 text-white/90 text-sm font-medium tracking-wide">
-            List of Athlete Requests
+            List of User Requests
           </div>
 
           <div className="space-y-3 px-4 pb-6 overflow-y-auto overflow-x-hidden max-h-[calc(100dvh-248px)]">
@@ -475,7 +538,7 @@ export default function RequestManagement() {
           <div className="w-full p-10">
             {!selected ? (
               <div className="rounded-2xl border bg-gray-50 p-12 text-center">
-                <Empty description="Select an athlete request from the left" />
+                <Empty description="Select a user request from the left" />
               </div>
             ) : (
               <div className="space-y-6">
@@ -516,7 +579,7 @@ export default function RequestManagement() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  <Labeled value={selected.name} label="Athlete Name" />
+                  <Labeled value={selected.name} label="User Name" />
                   <Labeled value={selected.deviceName ?? "—"} label="Device Name" />
                   <Labeled value={selected.email ?? "—"} label="Email" />
                   <Labeled

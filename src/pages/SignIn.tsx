@@ -143,14 +143,25 @@ export default function SignIn() {
       // Debug info (console only, no UI changes)
       console.info("[SignIn] gate check:", { role, status: statusNormalized });
 
-      // If not yet admin+accepted, auto-file a pending request (silent)
-      if (!(role === "admin" && statusNormalized === "accepted")) {
+      // Enforce web = admin-only. If not admin, sign out and block here.
+      if (role !== "admin") {
+        try {
+          await supabase.auth.signOut();
+        } catch {
+          /* ignore */
+        }
+        message.error("This web app is for admins only. Please use the mobile app.");
+        return;
+      }
+
+      // If admin but not yet approved, keep prior approval flow.
+      if (statusNormalized !== "accepted") {
         try {
           await submitAdminRequest();
         } catch {
           /* no-op */
         }
-        message.info("Your account is pending admin approval.");
+        message.info("Your admin account is pending approval.");
         // Stay on sign-in page; do not navigate to dashboard.
         return;
       }

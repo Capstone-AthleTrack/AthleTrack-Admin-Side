@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";      
+import { useEffect, useMemo, useState } from "react";        
 import {
   Input,
   Select,
@@ -140,6 +140,37 @@ function Labeled({ label, value }: { label: string; value?: string }) {
       </div>
     </label>
   );
+}
+
+/* ---------- CANONICALIZATION HELPERS (no UI changes) ---------- */
+/* We convert form inputs to the canonical values the DB CHECK expects. */
+function normSport(input?: string | null): string | null {
+  if (!input) return null;
+  let s = input.normalize("NFKC").toLowerCase().trim();
+  s = s.replace(/\s+/g, " ");
+  // Common variants → canonical
+  const map: Record<string, string> = {
+    "basketball": "basketball",
+    "volleyball": "volleyball",
+    "beach volleyball": "beach volleyball",
+    "futsal": "futsal",
+    "sepak-takraw": "sepak-takraw",
+    "sepak takraw": "sepak-takraw",
+    "softball": "softball",
+    "baseball": "baseball",
+    "football": "football",
+  };
+  return map[s] ?? s; // fall back to lower/trimmed value
+}
+
+function normTeam(input?: string | null): string | null {
+  if (!input) return null;
+  let t = input.normalize("NFKC").toLowerCase();
+  // Strip fancy punctuation, spaces
+  t = t.replace(/[’'`]/g, "").trim();
+  if (t.includes("women")) return "women";
+  if (t.includes("men")) return "men";
+  return t || null;
 }
 
 /* ---------- sport→team helper (keeps UI unchanged; just to populate options) ---------- */
@@ -353,6 +384,10 @@ export default function UserManagement() {
     try {
       const values = await form.validateFields();
 
+      // Canonicalize inputs for DB CHECK
+      const canonicalSport = normSport(values.sport);
+      const canonicalTeam  = normTeam(values.team);
+
       const payload: ProfileInsert = {
         email: values.email,
         role: roleUiToDb(values.role),
@@ -360,8 +395,8 @@ export default function UserManagement() {
         full_name: values.name ?? null,
         phone: values.phone ?? null,
         pup_id: values.pupId ?? null,
-        sport: values.sport ?? null,
-        team: values.team ?? null,
+        sport: canonicalSport,   // <- normalized
+        team: canonicalTeam,     // <- normalized
       };
 
       const { error } = await supabase
@@ -373,7 +408,8 @@ export default function UserManagement() {
       message.success("User added.");
       closeAdd();
       await loadProfiles();
-    } catch {
+    } catch (e) {
+      console.error(e);
       message.error("Failed to add user.");
     }
   };
@@ -397,28 +433,52 @@ export default function UserManagement() {
     editForm.resetFields();
   };
 
-  // Only update Sport, Team, Role (others are read-only) via admin RPC
+  // ----- precise type for Edge Function payload (fixes no-explicit-any) -----
+  type UpdateProfilePayload = {
+    user_id: string;
+    role?: "admin" | "coach" | "athlete" | "staff";
+    sport?: string | null;
+    team?: string | null;
+  };
+
+  // Only update Sport, Team, Role (others are read-only) via Edge Function (security definer)
   const handleEditSubmit = async () => {
     if (!selected) return;
     try {
       const values = await editForm.validateFields();
 
-      // Use SECURITY DEFINER RPC so RLS does not block admin updates
-      const { error } = await supabase.rpc("admin_update_profile", {
-        target_id: selected.id,
-        new_role: roleUiToDb(values.role),
-        new_sport: values.sport ?? null,
-        new_team: values.team ?? null,
+      // Normalize role for backend; only send if supported by enum (admin/coach/athlete/staff)
+      const roleDb = roleUiToDb(values.role);
+      const supportedRoles = new Set(["admin", "coach", "athlete", "staff"]);
+
+      // Canonicalize inputs so CHECK (profiles_sport_team_valid) passes
+      const canonicalSport = normSport(values.sport);
+      const canonicalTeam  = normTeam(values.team);
+
+      const payload: UpdateProfilePayload = {
+        user_id: selected.id,
+        sport: canonicalSport,
+        team: canonicalTeam,
+      };
+      if (roleDb && supportedRoles.has(roleDb)) {
+        payload.role = roleDb as UpdateProfilePayload["role"];
+      }
+
+      const { data, error } = await supabase.functions.invoke("update_profile", {
+        body: payload,
       });
 
       if (error) throw error;
+      if (data && (data as { error?: string }).error) {
+        throw new Error((data as { error?: string }).error as string);
+      }
 
       message.success("Profile updated.");
       closeEdit();
       await loadProfiles();
       setSelectedId(selected.id); // keep focus
     } catch (err) {
-      if (err instanceof Error) console.error(err);
+      console.error(err);
       message.error("Failed to update profile.");
     }
   };
@@ -664,7 +724,7 @@ export default function UserManagement() {
                 placeholder="Select team"
                 options={allowedTeamsForSport(form.getFieldValue('sport')).map((t) => ({
                   label: t === "men's" ? "Men’s" : "Women’s",
-                  value: t,
+                  value: t, // label kept; we canonicalize on submit
                 }))}
               />
             </Form.Item>
@@ -745,7 +805,7 @@ export default function UserManagement() {
                 placeholder="Select team"
                 options={allowedTeamsForSport(editForm.getFieldValue('sport')).map((t) => ({
                   label: t === "men's" ? "Men’s" : "Women’s",
-                  value: t,
+                  value: t, // label kept; we canonicalize on submit
                 }))}
               />
             </Form.Item>
