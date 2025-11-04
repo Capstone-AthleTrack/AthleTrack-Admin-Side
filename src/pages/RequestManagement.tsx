@@ -12,7 +12,7 @@ import clsx from "clsx";
 import NavBar from "@/components/NavBar";
 
 /* 🔌 use ONLY the shared Supabase singleton so apikey/auth headers are present */
-import { supabase } from "@/core/supabase";
+import { supabase, getFunctionUrl, getFunctionHeaders } from "@/core/supabase";
 
 /* ---------------- types + constants ---------------- */
 type ReqStatus = "Pending" | "Accepted" | "Denied";
@@ -312,7 +312,14 @@ export default function RequestManagement() {
       .filter((d) => (filter === "All" ? true : d.status === (filter as ReqStatus)))
       .filter((d) =>
         query.trim()
-          ? [d.name, d.email, d.deviceName, d.extra?.sport, d.extra?.role]
+          ? [
+              d.name,
+              d.email,
+              d.deviceName,
+              d.extra?.sport,
+              d.extra?.role,
+              d.extra?.pupId, // ← add PUP ID to searchable fields
+            ]
               .filter(Boolean)
               .some((f) => String(f).toLowerCase().includes(query.toLowerCase()))
           : true
@@ -338,19 +345,16 @@ export default function RequestManagement() {
 
     try {
       const { data: auth } = await supabase.auth.getUser();
-      const decidedBy = auth?.user?.id ?? null;
       const decidedAt = new Date().toISOString();
 
       // 🔎 Determine the real account_requests row id (fallback if we built the list from profiles)
       let requestId = id;
       {
-        const { data: reqById, error: ridErr } = await supabase
+        const { data: reqById } = await supabase
           .from("account_requests")
           .select("id,status")
           .eq("id", id)
           .maybeSingle();
-
-        if (ridErr) throw ridErr;
 
         if (!reqById) {
           const { data: reqByUser, error: rbuErr } = await supabase
@@ -369,73 +373,81 @@ export default function RequestManagement() {
         }
       }
 
-      if (status === "Accepted") {
-        // First, mark the request approved (if the table lacks some columns, retry with a minimal update)
-        const tryApprove = async () => {
+      // Preferred path: call Edge Function (create_user action=decide)
+      const finalRole: FinalRole =
+        (item.extra?.role?.toLowerCase() as FinalRole) || "athlete";
+
+      try {
+        const res = await fetch(getFunctionUrl("create_user"), {
+          method: "POST",
+          headers: await getFunctionHeaders(),
+          body: JSON.stringify({
+            action: "decide",
+            decision: status === "Accepted" ? "approve" : "deny",
+            request_id: requestId,
+            final_role: finalRole,
+            reason: cleanReason,
+          }),
+        });
+        const out = await res.json();
+        if (!res.ok || out?.error) {
+          throw new Error(out?.error || "Edge function failed");
+        }
+      } catch (edgeErr) {
+        // Use edgeErr so eslint doesn't complain, and log for debugging
+        console.warn("Edge function decide failed; falling back to direct updates:", edgeErr);
+
+        // Fallback: direct table updates (kept to avoid breaking flows if function is unavailable)
+        if (status === "Accepted") {
           const { error: e1 } = await supabase
             .from("account_requests")
             .update({
               status: "approved",
               reason: cleanReason,
-              decided_by: decidedBy,
+              decided_by: auth?.user?.id ?? null,
               decided_at: decidedAt,
             })
             .eq("id", requestId)
             .eq("status", "pending");
           if (e1) {
-            // minimal update fallback (for schemas without decided_by/decided_at)
             const { error: eMin } = await supabase
               .from("account_requests")
-              .update({
-                status: "approved",
-                reason: cleanReason,
-              })
+              .update({ status: "approved", reason: cleanReason })
               .eq("id", requestId)
               .eq("status", "pending");
             if (eMin) throw eMin;
           }
-        };
-        await tryApprove();
-
-        const finalRole: FinalRole =
-          (item.extra?.role?.toLowerCase() as FinalRole) || "athlete";
-        if (item.extra?.userId) {
-          // IMPORTANT: use existing enum label 'accepted' (NOT 'active')
-          const { error: e2 } = await supabase
-            .from("profiles")
-            .update({ role: finalRole, status: "accepted", is_active: true, updated_at: decidedAt })
-            .eq("id", item.extra.userId);
-          if (e2) throw e2;
-        }
-      } else if (status === "Denied") {
-        const { error: e3 } = await supabase
-          .from("account_requests")
-          .update({
-            status: "denied",
-            reason: cleanReason,
-            decided_by: decidedBy,
-            decided_at: decidedAt,
-          })
-          .eq("id", requestId)
-          .eq("status", "pending");
-        if (e3) {
-          // minimal fallback if columns are missing
-          const { error: eMin2 } = await supabase
+          if (item.extra?.userId) {
+            const { error: e2 } = await supabase
+              .from("profiles")
+              .update({ role: finalRole, status: "accepted", is_active: true, updated_at: decidedAt })
+              .eq("id", item.extra.userId);
+            if (e2) throw e2;
+          }
+        } else {
+          const { error: e3 } = await supabase
             .from("account_requests")
             .update({
               status: "denied",
               reason: cleanReason,
+              decided_by: auth?.user?.id ?? null,
+              decided_at: decidedAt,
             })
             .eq("id", requestId)
             .eq("status", "pending");
-          if (eMin2) throw eMin2;
+          if (e3) {
+            const { error: eMin2 } = await supabase
+              .from("account_requests")
+              .update({ status: "denied", reason: cleanReason })
+              .eq("id", requestId)
+              .eq("status", "pending");
+            if (eMin2) throw eMin2;
+          }
         }
       }
 
       await refreshRequests();
-
       setFilter((curr) => (curr !== "All" && curr !== status ? "All" : curr));
-
       message.success(status === "Accepted" ? "Request accepted." : "Request denied.");
     } catch (e) {
       if (e instanceof Error) {
@@ -467,7 +479,7 @@ export default function RequestManagement() {
                 className="bg-white rounded-lg"
               />
               <Select
-                className="min-w-[150px]"
+                className="min-w[150px] min-w-[150px]"
                 value={filter}
                 onChange={(v) => setFilter(v)}
                 options={[
@@ -485,7 +497,7 @@ export default function RequestManagement() {
             List of User Requests
           </div>
 
-          <div className="space-y-3 px-4 pb-6 overflow-y-auto overflow-x-hidden max-h-[calc(100dvh-248px)]">
+          <div className="space-y-3 px-4 pb-6 overflow-y-auto overflow-x-hidden max-h[calc(100dvh-248px)] max-h-[calc(100dvh-248px)]">
             {list.length === 0 && (
               <div className="rounded-xl bg-white">
                 <Empty description="No records" image={Empty.PRESENTED_IMAGE_SIMPLE} className="py-10" />
