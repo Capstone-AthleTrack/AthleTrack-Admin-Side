@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";      
+import { useEffect, useMemo, useState } from "react";           
 import {
   Input,
   Select,
@@ -71,18 +71,17 @@ interface ProfileRow {
 
 type ProfileInsert = Partial<ProfileRow>;
 
-/* RPC + View return row typing */
-type AdminListUsersRow = {
-  id: string;
-  email: string | null;
-  role: "admin" | "coach" | "athlete" | "user" | null;
-  status: string | null;
-  full_name: string | null;
-  phone: string | null;
-  pup_id: string | null;
-  sport: string | null;
-  team: string | null;
-  created_at: string | null;
+/* RPC + View return row typing (loose because view columns can drift) */
+type AdminListUsersRow = Record<string, unknown> & {
+  id?: string;
+  email?: string | null;
+  role?: string | null;
+  status?: string | null;
+  full_name?: string | null;
+  phone?: string | null;
+  sport?: string | null;
+  team?: string | null;
+  created_at?: string | null;
 };
 
 /* ---------- role label helpers (UI <-> DB) ---------- */
@@ -110,6 +109,26 @@ function normalizeStatus(s?: string | null): DBStatus {
   return "pending";
 }
 
+/* ---------- small safe-pickers (handle view column drift) ---------- */
+function pickStr(obj: Record<string, unknown>, ...keys: string[]): string | null {
+  for (const k of keys) {
+    const v = obj[k];
+    if (typeof v === "string" && v.length) return v;
+  }
+  return null;
+}
+function pickLower(obj: Record<string, unknown>, ...keys: string[]): string | null {
+  const s = pickStr(obj, ...keys);
+  return s ? s.toLowerCase() : null;
+}
+
+/* ---------- team utils ---------- */
+function toUiTeam(val?: string | null): string | undefined {
+  const n = normTeam(val);
+  if (!n) return val ?? undefined;
+  return n === "men" ? "men's" : "women's";
+}
+
 /* ---------- map DB row -> existing UI item shape ---------- */
 function toItem(p: ProfileRow): RequestItem {
   return {
@@ -125,12 +144,12 @@ function toItem(p: ProfileRow): RequestItem {
       phone: p.phone ?? undefined,
       pupId: p.pup_id ?? undefined,
       sport: p.sport ?? undefined,
-      team: p.team ?? undefined,
+      team: toUiTeam(p.team), // pretty "men's"/"women's" for the details panel
     },
   };
 }
 
-/* ---------------- small helper ---------------- */
+/* ---------------- small helpers ---------------- */
 function Labeled({ label, value }: { label: string; value?: string }) {
   return (
     <label className="block">
@@ -140,6 +159,37 @@ function Labeled({ label, value }: { label: string; value?: string }) {
       </div>
     </label>
   );
+}
+
+/* ---------- CANONICALIZATION HELPERS (no UI changes) ---------- */
+/* We convert form inputs to the canonical values the DB CHECK/enum expects. */
+function normSport(input?: string | null): string | null {
+  if (!input) return null;
+  let s = input.normalize("NFKC").toLowerCase().trim();
+  s = s.replace(/\s+/g, " ");
+  const map: Record<string, string> = {
+    basketball: "basketball",
+    volleyball: "volleyball",
+    "beach volleyball": "beach volleyball",
+    futsal: "futsal",
+    "sepak-takraw": "sepak-takraw",
+    "sepak takraw": "sepak-takraw",
+    softball: "softball",
+    baseball: "baseball",
+    football: "football",
+  };
+  return map[s] ?? s;
+}
+
+function normTeam(input?: string | null): string | null {
+  if (!input) return null;
+  // accept "men", "women", "men's", "women's", smart quotes, etc.
+  const t = input.normalize("NFKC").toLowerCase().replace(/[’'`]/g, "").trim();
+  if (t === "men" || t === "mens") return "men";
+  if (t === "women" || t === "womens") return "women";
+  if (t.includes("women")) return "women";
+  if (t.includes("men")) return "men";
+  return null;
 }
 
 /* ---------- sport→team helper (keeps UI unchanged; just to populate options) ---------- */
@@ -193,71 +243,35 @@ export default function UserManagement() {
     }
   }
 
-  /* ---------- load from Supabase (view → rpc → table) ---------- */
+  /* ---------- load from Supabase (resilient view -> table) ---------- */
   async function loadProfiles() {
-    // 1) SECURITY DEFINER VIEW (preferred)
+    // 1) SECURITY DEFINER VIEW (resilient to column drift)
     try {
+      // Use select('*') to avoid 400 if a specific column is missing (e.g. pup_id)
       const { data: viewRows, error: viewErr } = await supabase
         .from("v_users_admin")
-        .select(
-          "id,email,role,status,full_name,phone,pup_id,sport,team,created_at"
-        )
+        .select("*")
         .order("created_at", { ascending: false });
 
       if (!viewErr && Array.isArray(viewRows)) {
-        const items = (viewRows as AdminListUsersRow[]).map((r) =>
-          toItem({
-            id: String(r.id),
-            email: r.email ?? null,
-            role: (String(r.role ?? "user").toLowerCase() as DBRole) ?? null,
-            status: normalizeStatus(r.status),
-            full_name: r.full_name ?? null,
-            phone: r.phone ?? null,
-            pup_id: r.pup_id ?? null,
-            sport: r.sport ?? null,
-            team: r.team ?? null,
-            created_at: r.created_at ?? null,
-          })
-        );
-        setData(items);
-        await refreshAvatars(items.map((i) => i.id));
-        if (selectedId && !items.some((d) => d.id === selectedId)) {
-          setSelectedId(null);
-        }
-        return;
-      }
-    } catch {
-      // fallthrough to RPC
-    }
+        const items = (viewRows as AdminListUsersRow[]).map((row) => {
+          const r = row as Record<string, unknown>;
+          const mapped: ProfileRow = {
+            id: String(r.id ?? ""),
+            email: pickStr(r, "email"),
+            role: (pickLower(r, "role") as DBRole) ?? null,
+            status: normalizeStatus(pickStr(r, "status")),
+            full_name: pickStr(r, "full_name", "name"),
+            phone: pickStr(r, "phone", "phone_number"),
+            // handle different view aliases for PUP ID
+            pup_id: pickStr(r, "pup_id", "pup", "pupid", "pup_id_number"),
+            sport: pickStr(r, "sport"),
+            team: pickStr(r, "team", "team_name"),
+            created_at: pickStr(r, "created_at", "created", "inserted_at"),
+          };
+          return toItem(mapped);
+        });
 
-    // 2) SECURITY DEFINER RPC
-    try {
-      const { data: rpcRows, error: rpcErr } = await supabase.rpc(
-        "admin_list_users",
-        {
-          search: "",
-          role_filter: "all",
-          sport_filter: "all",
-          page: 1,
-          page_size: 500,
-        }
-      );
-
-      if (!rpcErr && Array.isArray(rpcRows)) {
-        const items = (rpcRows as AdminListUsersRow[]).map((r) =>
-          toItem({
-            id: String(r.id),
-            email: r.email ?? null,
-            role: (String(r.role ?? "user").toLowerCase() as DBRole) ?? null,
-            status: normalizeStatus(r.status),
-            full_name: r.full_name ?? null,
-            phone: r.phone ?? null,
-            pup_id: r.pup_id ?? null,
-            sport: r.sport ?? null,
-            team: r.team ?? null,
-            created_at: r.created_at ?? null,
-          })
-        );
         setData(items);
         await refreshAvatars(items.map((i) => i.id));
         if (selectedId && !items.some((d) => d.id === selectedId)) {
@@ -269,7 +283,7 @@ export default function UserManagement() {
       // fallthrough to table
     }
 
-    // 3) Fallback: direct table read (RLS may restrict to current user)
+    // 2) Fallback: direct table read (RLS may restrict to current user)
     const { data: rows, error } = await supabase
       .from("profiles")
       .select(
@@ -353,6 +367,14 @@ export default function UserManagement() {
     try {
       const values = await form.validateFields();
 
+      // Canonicalize inputs for DB CHECK
+      const canonicalSport = normSport(values.sport);
+      // Prefer exact value if it is already "men"|"women"; otherwise normalize
+      const canonicalTeam =
+        values.team === "men" || values.team === "women"
+          ? values.team
+          : normTeam(values.team);
+
       const payload: ProfileInsert = {
         email: values.email,
         role: roleUiToDb(values.role),
@@ -360,8 +382,8 @@ export default function UserManagement() {
         full_name: values.name ?? null,
         phone: values.phone ?? null,
         pup_id: values.pupId ?? null,
-        sport: values.sport ?? null,
-        team: values.team ?? null,
+        sport: canonicalSport,
+        team: canonicalTeam,
       };
 
       const { error } = await supabase
@@ -373,7 +395,8 @@ export default function UserManagement() {
       message.success("User added.");
       closeAdd();
       await loadProfiles();
-    } catch {
+    } catch (e) {
+      console.error(e);
       message.error("Failed to add user.");
     }
   };
@@ -382,6 +405,8 @@ export default function UserManagement() {
   const openEdit = () => {
     if (!selected) return;
     setIsEditOpen(true);
+    // Normalize the incoming team so it matches the Select option values
+    const initialTeam = normTeam(selected.extra?.team) || "";
     editForm.setFieldsValue({
       name: selected.name || "",
       email: selected.email || "",
@@ -389,7 +414,7 @@ export default function UserManagement() {
       phone: selected.extra?.phone || "",
       pupId: selected.extra?.pupId || "",
       sport: selected.extra?.sport || "",
-      team: selected.extra?.team || "",
+      team: initialTeam, // ensure value is "men" | "women" for the Select
     });
   };
   const closeEdit = () => {
@@ -397,28 +422,45 @@ export default function UserManagement() {
     editForm.resetFields();
   };
 
-  // Only update Sport, Team, Role (others are read-only) via admin RPC
+  // Only update Sport, Team, Role (others are read-only) via Edge Function (Security Definer)
   const handleEditSubmit = async () => {
     if (!selected) return;
     try {
       const values = await editForm.validateFields();
 
-      // Use SECURITY DEFINER RPC so RLS does not block admin updates
-      const { error } = await supabase.rpc("admin_update_profile", {
-        target_id: selected.id,
-        new_role: roleUiToDb(values.role),
-        new_sport: values.sport ?? null,
-        new_team: values.team ?? null,
+      const roleDb = roleUiToDb(values.role);
+      const supportedRoles = new Set(["admin", "coach", "athlete", "user"]);
+
+      // Canonicalize inputs so the CHECK/enum passes
+      const canonicalSport = normSport(values.sport);
+
+      // Prefer exact token if it's already "men"|"women"; else normalize any label ("men's", etc.)
+      const canonicalTeam =
+        values.team === "men" || values.team === "women"
+          ? values.team
+          : normTeam(values.team);
+
+      // Call Edge Function (single source of truth)
+      const { data: fnData, error: fnErr } = await supabase.functions.invoke("update_profile", {
+        body: {
+          user_id: selected.id,
+          sport: canonicalSport,
+          team: canonicalTeam,
+          ...(roleDb && supportedRoles.has(roleDb) ? { role: roleDb } : {}),
+        },
       });
 
-      if (error) throw error;
+      if (fnErr) throw fnErr as unknown as Error;
+      if (fnData && (fnData as { error?: string }).error) {
+        throw new Error((fnData as { error?: string }).error as string);
+      }
 
       message.success("Profile updated.");
       closeEdit();
       await loadProfiles();
       setSelectedId(selected.id); // keep focus
     } catch (err) {
-      if (err instanceof Error) console.error(err);
+      console.error(err);
       message.error("Failed to update profile.");
     }
   };
@@ -526,7 +568,7 @@ export default function UserManagement() {
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-[11px] text-gray-400 whitespace-nowrap">
+                  <span className="text:[11px] text-gray-400 whitespace-nowrap">
                     {dayjs(item.issuedAt).fromNow()}
                   </span>
                   <RightOutlined className="text-gray-400" />
@@ -662,9 +704,10 @@ export default function UserManagement() {
             >
               <Select
                 placeholder="Select team"
+                /* keep UI label the same but send enum-safe values */
                 options={allowedTeamsForSport(form.getFieldValue('sport')).map((t) => ({
                   label: t === "men's" ? "Men’s" : "Women’s",
-                  value: t,
+                  value: t === "men's" ? "men" : "women",
                 }))}
               />
             </Form.Item>
@@ -743,9 +786,10 @@ export default function UserManagement() {
             >
               <Select
                 placeholder="Select team"
+                /* keep UI label the same but send enum-safe values */
                 options={allowedTeamsForSport(editForm.getFieldValue('sport')).map((t) => ({
                   label: t === "men's" ? "Men’s" : "Women’s",
-                  value: t,
+                  value: t === "men's" ? "men" : "women",
                 }))}
               />
             </Form.Item>

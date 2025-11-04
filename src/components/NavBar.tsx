@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Input, Avatar, Dropdown, Menu, Modal } from "antd";
-import { LogoutOutlined, SearchOutlined, SettingOutlined, UserOutlined } from "@ant-design/icons";
+import { Avatar, Dropdown, Menu, Modal } from "antd";
+import { LogoutOutlined, SettingOutlined, UserOutlined } from "@ant-design/icons";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { BRAND } from "@/brand";
 
@@ -131,12 +131,7 @@ export default function NavBar() {
         </nav>
 
         <div className="flex items-center gap-3">
-          <Input
-            prefix={<SearchOutlined />}
-            placeholder="Search"
-            className="w-40 md:w-56 lg:w-72 rounded-full"
-            aria-label="Search"
-          />
+          {/* Search bar removed from navbar as requested */}
           <Dropdown overlay={menu} trigger={["click"]}>
             <Avatar size="large" icon={<UserOutlined />} />
           </Dropdown>

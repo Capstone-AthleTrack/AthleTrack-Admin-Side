@@ -1,4 +1,4 @@
-// src/services/admin-approval.ts
+// src/services/admin-approval.ts 
 import type { PostgrestError } from "@supabase/supabase-js";
 import supabase from "@/core/supabase";
 
@@ -43,9 +43,11 @@ export async function postSignUpBootstrap(opts?: {
 
   // Minimal upsert to profiles (self row). Idempotent.
   // NOTE: Do NOT include user_id — it's a GENERATED column in DB.
+  const emailLc: string | null = (user.email ? user.email.toLowerCase() : null);
+
   const payload: Record<string, unknown> = {
     id: user.id,
-    email: user.email ?? null,
+    email: emailLc,
     // Don't force role/status here; admin approval flow will set those.
     updated_at: new Date().toISOString(),
   };
@@ -69,7 +71,7 @@ export async function postSignUpBootstrap(opts?: {
   if (upsertErr?.code === "42703") {
     const slim: Record<string, unknown> = {
       id: user.id,
-      email: user.email ?? null,
+      email: emailLc,
       updated_at: new Date().toISOString(),
     };
     if (fullName) slim["full_name"] = fullName;
@@ -126,7 +128,7 @@ export async function submitAdminRequest(reason?: string | null) {
 
   const { error } = await supabase.from("account_requests").insert({
     user_id: user.id,
-    email: user.email ?? null,
+    email: (user.email ?? "").toLowerCase() || null,
     full_name: (user.user_metadata?.full_name ?? "").trim() || null,
     desired_role: "admin",
     device_name: (typeof navigator !== "undefined" ? navigator.userAgent : "web").slice(0, 128),

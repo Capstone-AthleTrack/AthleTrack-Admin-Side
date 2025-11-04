@@ -1,9 +1,12 @@
-import { useState } from "react";     
+import { useState } from "react";       
 import { Card, Form, Input, Button, Typography, Divider, App as AntdApp } from "antd";
 import { MailOutlined, LockOutlined, UserOutlined } from "@ant-design/icons";
 import { BRAND } from "@/brand";
 import { postSignUpBootstrap, submitAdminRequest } from "@/services/admin-approval";
 import { supabaseUrl, supabaseAnonKey } from "@/core/supabase";
+/* NEW: use supabase session to send a real JWT when available */
+import supabase from "@/core/supabase";
+/* Optional: if you later want to condition on role more strictly, you can import isAdmin from admin-approval */
 
 interface SignUpFormValues {
   fullName: string;
@@ -15,11 +18,16 @@ interface SignUpFormValues {
 
 type CreateAdminResponse =
   | { ok: true; id: string }
-  | { error: string };
+  | { error: string; details?: string };
+
 
 // Gmail-only helper (client-side validation)
 const isGmail = (e?: string | null) =>
   !!e && e.toLowerCase().trim().endsWith("@gmail.com");
+
+// Strong password helper (≥12 chars, 1 upper, 1 lower, 1 digit, 1 special)
+const isStrongPassword = (p?: string | null) =>
+  !!p && /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^\w\s]).{12,}$/.test(p);
 
 export default function SignUp() {
   const [form] = Form.useForm<SignUpFormValues>();
@@ -38,21 +46,50 @@ export default function SignUp() {
         return;
       }
 
-      // Create admin via secure Edge Function (no direct browser sign-up for admins)
+      // Client-side strong password check (server also enforces)
+      if (!isStrongPassword(values.password)) {
+        message.error(
+          "Password must be at least 12 characters and include upper, lower, digit, and special character."
+        );
+        return;
+      }
+
+      // Decide desired role:
+      // - If caller has a signed-in session token (and is an admin), they can create admin.
+      // - Otherwise, fall back to athlete so sign-up succeeds with pending status by default.
+      let desiredRole: "admin" | "coach" | "athlete" = "athlete";
+      try {
+        const { data: s } = await supabase.auth.getSession();
+        const token = s.session?.access_token || null;
+        if (token) {
+          // If a user is signed in (e.g., an existing admin creating another admin),
+          // allow the request to ask for 'admin'; server will enforce.
+          desiredRole = "admin";
+        }
+      } catch {
+        desiredRole = "athlete";
+      }
+
+      // Build headers — include user JWT if present; else anon key.
+      const { data: s } = await supabase.auth.getSession();
+      const token = s.session?.access_token || supabaseAnonKey;
+
+      // Create user via secure Edge Function (no direct browser sign-up)
       // Use ABSOLUTE Supabase URL to avoid relative /functions calls to the app origin.
-      const resp = await fetch(`${supabaseUrl}/functions/v1/create_admin`, {
+      const resp = await fetch(`${supabaseUrl}/functions/v1/create_user`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          // Send anon key for browser-invoked Edge Functions
-          Authorization: `Bearer ${supabaseAnonKey}`,
+          // Send a real Authorization header: user JWT if signed in (admin flow), else anon key
+          Authorization: `Bearer ${token}`,
           apikey: supabaseAnonKey,
         },
         body: JSON.stringify({
-          fullName: values.fullName,
-          pupId: values.pupId,
-          email, // normalized to lowercase
+          full_name: values.fullName,
+          pupId: values.pupId, // harmless if backend ignores
+          email,               // normalized to lowercase
           password: values.password,
+          role: desiredRole,   // "admin" when an admin is logged in; otherwise "athlete"
         }),
       });
 
@@ -66,18 +103,23 @@ export default function SignUp() {
       if (!resp.ok) {
         const err =
           data && typeof data === "object" && "error" in data
-            ? (data as { error: string }).error
-            : `Failed to create admin (HTTP ${resp.status})`;
+            ? (data as { error: string; details?: string }).details
+              ? `${(data as { error: string; details?: string }).error}: ${(data as { error: string; details?: string }).details}`
+              : (data as { error: string }).error
+            : `Failed to create account (HTTP ${resp.status})`;
         message.error(err);
         return;
       }
 
-      // Success: account created server-side; profile upserted with role=admin & device=web
-      // Keep UI behavior the same: toast + clear fields, no navigation change
-      message.success("Admin created. You may now sign in.");
+      // Success. If created as athlete (most cases), inform the user about pending approval.
+      if (desiredRole === "admin") {
+        message.success("Admin created. You may now sign in.");
+      } else {
+        message.success("Account created. Your access is pending admin approval.");
+      }
       form.resetFields();
 
-      // (Optional legacy hooks kept as no-ops to preserve flow if you later re-enable them)
+      // Optional legacy hooks (safe no-ops if not applicable)
       try { await postSignUpBootstrap(); } catch { /* ignore */ }
       try { await submitAdminRequest();   } catch { /* ignore */ }
 
