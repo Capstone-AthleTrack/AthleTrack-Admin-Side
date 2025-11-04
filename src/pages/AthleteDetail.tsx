@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef } from "react"; 
+import { useMemo, useState, useEffect, useRef } from "react";  
 import { useNavigate, useParams } from "react-router-dom";
 import {
   BarChart,
@@ -40,6 +40,19 @@ const slugify = (s: string) =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+
+/** Local shape that tolerates both `id` and `user_id` and optional fields we render. */
+type ExtendedProfile = ProfileLite & {
+  id?: string;
+  user_id?: string;
+  email?: string | null;
+  pup_webmail?: string | null;
+  pup_id?: string | number | null;
+  birthdate?: string | null;
+  phone?: string | null;
+  role?: string | null;
+  full_name?: string | null;
+};
 
 async function exportChartAsPdf(node: HTMLElement, filename: string) {
   const dataUrl = await toPng(node, { cacheBust: true, backgroundColor: "#FFFFFF" });
@@ -179,7 +192,7 @@ export default function AthleteDetail() {
   const { sportName = "", athleteName = "" } = useParams<{ sportName?: string; athleteName?: string }>();
 
   // Live state
-  const [profile, setProfile] = useState<ProfileLite | null>(null);
+  const [profile, setProfile] = useState<ExtendedProfile | null>(null);
   const [prepostRows, setPrepostRows] = useState<ChartAthletePrePost[]>([]);
   const [perfRows, setPerfRows] = useState<ChartAthletePerf[]>([]);
 
@@ -190,32 +203,59 @@ export default function AthleteDetail() {
   const prepostChartRef = useRef<HTMLDivElement>(null);
   const performanceChartRef = useRef<HTMLDivElement>(null);
 
-  // Resolve athlete then load bundle
+  // Resolve athlete then load bundle (guards added; no UI changes)
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const resolved = await supabase
-          .from("v_profile_lite")
-          .select("*")
-          .ilike("full_name", athleteName)
-          .limit(1)
-          .returns<ProfileLite[]>();
+        const q = decodeURIComponent(athleteName || "").replace(/\+/g, " ").trim();
+        if (!q) return;
 
-        const row = resolved.data?.[0] ?? null;
-        if (!row) return;
+        // Try the view first
+        let row: ExtendedProfile | null = null;
+        {
+          const { data, error } = await supabase
+            .from("v_profile_lite")
+            .select("*")
+            .ilike("full_name", `%${q}%`)
+            .limit(1)
+            .maybeSingle<ExtendedProfile>();
+          if (!error && data) row = data;
+        }
 
-        if (!alive) return;
+        // Fallback to base table if needed
+        if (!row) {
+          const { data } = await supabase
+            .from("profiles")
+            .select("*")
+            .ilike("full_name", `%${q}%`)
+            .limit(1)
+            .maybeSingle<ExtendedProfile>();
+          if (data) row = data;
+        }
+
+        if (!row || !alive) return;
+
         setProfile(row);
 
-        const bundle = await loadAthleteBundle(row.user_id);
+        // Prefer user_id; fall back to id (never pass undefined)
+        const athleteKey: string | null = row.user_id ?? row.id ?? null;
+        if (!athleteKey) return;
+
+        const bundle = await loadAthleteBundle(athleteKey);
         if (!alive) return;
 
-        setProfile(bundle.profile ?? row);
+        // 🔧 Merge to preserve `pup_id`/email coming from the view/base table.
+        const merged: ExtendedProfile = {
+          ...row,
+          ...((bundle as { profile?: ExtendedProfile }).profile ?? {}),
+        };
+        setProfile(merged);
+
         setPrepostRows(shapeAthletePrePost(bundle.prepost));
         setPerfRows(shapeAthletePerf(bundle.performance));
       } catch {
-        /* silent fallback */
+        // silent fallback to placeholders
       }
     })();
     return () => {
@@ -223,16 +263,21 @@ export default function AthleteDetail() {
     };
   }, [athleteName]);
 
+  // Derive a single stable key for avatar fetching to satisfy exhaustive-deps
+  const avatarKey = useMemo<string | null>(() => {
+    if (!profile) return null;
+    return profile.user_id ?? profile.id ?? null;
+  }, [profile]);
+
   // Fetch a signed avatar URL for the resolved profile (no UI changes)
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const uid = profile?.user_id;
-        if (!uid) return;
-        const map = await bulkSignedByUserIds([uid], 60 * 60 * 24);
+        if (!avatarKey) return;
+        const map = await bulkSignedByUserIds([avatarKey], 60 * 60 * 24);
         if (!alive) return;
-        if (map && map[uid]) setAvatarSrc(map[uid]);
+        if (map && map[avatarKey]) setAvatarSrc(map[avatarKey]);
       } catch {
         /* ignore; fallback to placeholder */
       }
@@ -240,7 +285,7 @@ export default function AthleteDetail() {
     return () => {
       alive = false;
     };
-  }, [profile?.user_id]);
+  }, [avatarKey]);
 
   // Fallback adapters for charts
   const prePostData = useMemo(
@@ -293,9 +338,9 @@ export default function AthleteDetail() {
     [perfRows]
   );
 
-  // Build export rows like SportsDetail (with athlete metadata)
+  // Build export rows like SportsDetail (with athlete metadata) — now using real email + PUP ID
   const athleteFull = profile?.full_name ?? athleteName;
-  const athleteEmail = profile?.pup_webmail ?? "";
+  const athleteEmail = profile?.email ?? profile?.pup_webmail ?? "";
   const athletePUP = profile?.pup_id != null ? String(profile.pup_id) : "";
 
   const prepostExportRows = useMemo(
@@ -364,7 +409,6 @@ export default function AthleteDetail() {
               <img src={avatarSrc || "/images/coach_photo.jpg"} alt={athleteName} className="w-full h-full object-cover" />
             </div>
             <h2 className="text-xl font-semibold">{athleteName}</h2>
-            <p className="text-sm opacity-80">PUP ID Number</p>
             <p className="text-sm opacity-80 mb-6">{profile?.pup_id ?? ""}</p>
           </div>
 
@@ -374,8 +418,9 @@ export default function AthleteDetail() {
               {profile?.full_name ?? athleteName}
             </div>
 
+            {/* Use real email from profiles (fall back to pup_webmail, else empty string) */}
             <div className="w-full rounded-md bg-white px-4 py-2 text-gray-900">
-              {profile?.pup_webmail ?? "athlete@email.com"}
+              {profile?.email ?? profile?.pup_webmail ?? ""}
             </div>
 
             <div className="flex items-center gap-2">
