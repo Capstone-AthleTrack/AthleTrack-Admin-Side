@@ -415,7 +415,7 @@ export default function SportDetail() {
     try {
       const urls = await bulkSignedByUserIds(ids, 60 * 60 * 24);
       if (Object.keys(urls).length) {
-        setAvatarById((prev) => ({ ...prev, ...urls }));
+        setAvatarById((prev) => ({ ...prev, ...urls })); 
       }
     } catch {
       /* ignore; placeholders stay */
@@ -647,15 +647,27 @@ export default function SportDetail() {
 
   /* Fallback lists to preserve UI if live arrays are empty */
   const coachesToRender = useMemo<CoachItem[]>(() => {
+    // Build the base list (live > fallback)
+    let items: { name: string; image?: string }[] = [];
     if (coaches.length) {
-      return coaches.map((c) => {
+      items = coaches.map((c) => {
         const id = (c as unknown as { id?: string }).id;
         const src = id ? avatarById[id] : undefined;
         return { name: c.full_name || "Coach", image: src || COACH_PLACEHOLDER };
       });
+    } else {
+      const raw = Array.from((sport?.coaches ?? []) as ReadonlyArray<CoachItem>);
+      items = raw.map((x) =>
+        typeof x === "string" ? { name: x, image: COACH_PLACEHOLDER } : { name: x.name, image: x.image || COACH_PLACEHOLDER }
+      );
     }
-    const raw = Array.from((sport?.coaches ?? []) as ReadonlyArray<CoachItem>);
-    return raw.map((x) => (typeof x === "string" ? { name: x } : x));
+
+    // ✅ Flexible placeholders: ensure a minimum tile count but never hide real coaches
+    const minTiles = Math.max(3, (sport?.coaches?.length ?? 0));
+    while (items.length < minTiles) {
+      items.push({ name: "Coach", image: COACH_PLACEHOLDER });
+    }
+    return items;
   }, [coaches, sport, avatarById]);
 
   const athletesToRender = useMemo(() => {
