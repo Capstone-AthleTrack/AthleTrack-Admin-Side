@@ -1,6 +1,6 @@
-// src/pages/Dashboard.tsx (admin) 
-// Patch: fix ESLint (no-explicit-any, unused vars, prefer-const) and
-// wire cards & charts to telemetry via services (no UI/styling changes).
+// src/pages/Dashboard.tsx (admin)
+// Patch: no UI changes. Hide horizontal scrollbars; avoid failing endpoints;
+// build charts from safe public views with graceful fallbacks.
 
 import { Card, Button, Tabs } from "antd";
 import type { TabsProps } from "antd";
@@ -17,12 +17,7 @@ import Navbar from "@/components/NavBar";
 import { BRAND } from "@/brand";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/core/supabase";
-import {
-  exportReportsCSV,
-  exportLoginCSV,
-  fetchDailyReports,
-  fetchLoginFrequency,
-} from "@/services/metrics";
+import { exportReportsCSV, exportLoginCSV } from "@/services/metrics";
 /* Avatars: get a signed URL for the logged-in admin (no UI changes) */
 import { bulkSignedByUserIds } from "@/services/avatars";
 
@@ -111,6 +106,12 @@ export default function Dashboard() {
   // Logged-in admin avatar (signed URL)
   const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
 
+  // Small helper CSS to keep horizontal scrolling but hide the scrollbar UI
+  const HIDE_SCROLL_CSS = `
+    .scroll-x-clean { overflow-x: auto; -ms-overflow-style: none; scrollbar-width: none; }
+    .scroll-x-clean::-webkit-scrollbar { display: none; }
+  `;
+
   // Resolve current user and sign their avatar for the Navbar (no UI change)
   useEffect(() => {
     let alive = true;
@@ -149,14 +150,11 @@ export default function Dashboard() {
       try {
         setLoading(true);
 
-        // 1) KPI cards — app visits & active users from telemetry; total / new users from profiles
+        // 1) KPI cards
         const today = new Date();
         const { fromIso: phStartIso, toIso: phEndIso } = dayBoundsPH(today);
 
-        // appVisits + activeUsers from sessions (via service helper)
-        const reports = await fetchDailyReports().catch(() => null);
-
-        // total users from profiles
+        // Total users (exact count)
         let totalUsers = 0;
         {
           const { count, error } = await supabase
@@ -165,7 +163,7 @@ export default function Dashboard() {
           if (!error && typeof count === "number") totalUsers = count;
         }
 
-        // new users today (try created_at, then inserted_at)
+        // New users today (created_at or inserted_at)
         let newUsers = 0;
         {
           let counted = false;
@@ -178,123 +176,117 @@ export default function Dashboard() {
             newUsers = r1.count;
             counted = true;
           }
-          if (!counted && r1.error) {
+          if (!counted) {
             const r2 = await supabase
               .from("profiles")
               .select("*", { count: "exact", head: true })
               .gte("inserted_at", phStartIso)
               .lt("inserted_at", phEndIso);
-            if (!r2.error && typeof r2.count === "number") {
-              newUsers = r2.count;
+            if (!r2.error && typeof r2.count === "number") newUsers = r2.count;
+          }
+        }
+
+        // Usage + KPI (app visits / active users) from public view v_daily_activity_24h
+        let appVisits = 0;
+        let activeUsers = 0;
+        {
+          try {
+            const { data, error } = await supabase
+              .from("v_daily_activity_24h")
+              .select("bucket, active_users, session_starts")
+              .order("bucket", { ascending: true });
+
+            if (!error && Array.isArray(data)) {
+              const mapped: UsagePoint[] = (data as Array<{
+                bucket: string;
+                active_users: number | null;
+                session_starts: number | null;
+              }>).map((r) => {
+                // use toPH once to satisfy TS/ESLint and keep PH hours
+                const ph = toPH(r.bucket);
+                return {
+                  time: fmtHourLabelFromDate(
+                    new Date(ph.getFullYear(), ph.getMonth(), ph.getDate(), ph.getHours())
+                  ),
+                  active: Number(r.active_users ?? 0),
+                  visits: Number(r.session_starts ?? 0),
+                };
+              });
+
+              if (alive) setUsageSeries(mapped);
+              appVisits = mapped.reduce((s, v) => s + (v.visits || 0), 0);
+              // max active in any hour (or sum—choose max to mirror "concurrent-ish")
+              activeUsers = mapped.reduce((m, v) => (v.active > m ? v.active : m), 0);
+            } else {
+              // fallback: empty 24h baseline
+              const now = new Date();
+              const buckets: UsagePoint[] = [];
+              for (let i = 23; i >= 0; i--) {
+                const h = new Date(now.getTime() - i * 60 * 60 * 1000);
+                buckets.push({ time: fmtHourLabelFromDate(h), active: 0, visits: 0 });
+              }
+              if (alive) setUsageSeries(buckets);
             }
+          } catch {
+            // fallback: empty 24h baseline
+            const now = new Date();
+            const buckets: UsagePoint[] = [];
+            for (let i = 23; i >= 0; i--) {
+              const h = new Date(now.getTime() - i * 60 * 60 * 1000);
+              buckets.push({ time: fmtHourLabelFromDate(h), active: 0, visits: 0 });
+            }
+            if (alive) setUsageSeries(buckets);
           }
         }
 
         if (alive) {
           setKpi({
             total_users: totalUsers,
-            app_visits: reports?.appVisits ?? 0,
+            app_visits: appVisits,
             new_users: newUsers,
-            active_users: reports?.activeUsers ?? 0,
+            active_users: activeUsers,
           });
         }
 
-        // 2) Usage line (last 24h by hour) — prefer direct table; fallback to legacy view if present
-        const now = new Date();
-        const from24 = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-        const fromIso = from24.toISOString();
-        const toIso = now.toISOString();
-
-        // Build empty 24 buckets oldest→newest
-        const buckets: { label: string; users: Set<string>; visits: number }[] = [];
-        for (let i = 23; i >= 0; i--) {
-          const h = new Date(now.getTime() - i * 60 * 60 * 1000);
-          const lbl = fmtHourLabelFromDate(h);
-          buckets.push({ label: lbl, users: new Set(), visits: 0 });
-        }
-
-        let haveUsage = false;
-
-        // Try direct from sessions
-        try {
-          const { data: sess, error } = await supabase
-            .from("sessions")
-            .select("user_id, started_at")
-            .gte("started_at", fromIso)
-            .lt("started_at", toIso)
-            .order("started_at", { ascending: true })
-            .limit(100000);
-
-          if (!error && Array.isArray(sess)) {
-            for (const row of sess as Array<{ user_id: string; started_at: string }>) {
-              const ph = toPH(row.started_at);
-              const label = fmtHourLabelFromDate(
-                new Date(ph.getFullYear(), ph.getMonth(), ph.getDate(), ph.getHours())
-              );
-              const bucket = buckets.find((b) => b.label === label);
-              if (bucket) {
-                bucket.visits += 1;
-                bucket.users.add(row.user_id);
-              }
-            }
-            haveUsage = true;
-          } else if (relationMissing(error)) {
-            haveUsage = false;
-          }
-        } catch {
-          haveUsage = false;
-        }
-
-        // Fallback to legacy view `v_daily_activity_24h`
-        if (!haveUsage) {
-          try {
-            const a = await supabase
-              .from("v_daily_activity_24h")
-              .select("*")
-              .order("bucket", { ascending: true });
-
-            if (!a.error && Array.isArray(a.data)) {
-              const mapped: UsagePoint[] = (a.data as Array<{
-                bucket: string;
-                active_users?: number | null;
-                session_starts?: number | null;
-                session_start?: number | null;
-              }>).map((r) => ({
-                time: fmtHourLabelFromDate(new Date(r.bucket)),
-                active: Number(r.active_users ?? 0),
-                visits: Number((r.session_starts ?? r.session_start ?? 0) as number),
-              }));
-              if (alive) setUsageSeries(mapped);
-            }
-          } catch {
-            // ignore
-          }
-        } else {
-          // Convert buckets to series
-          const mapped: UsagePoint[] = buckets.map((b) => ({
-            time: b.label,
-            active: b.users.size,
-            visits: b.visits,
-          }));
-          if (alive) setUsageSeries(mapped);
-        }
-
-        // 3) Login frequency (last 30 days) via service (direct-table fallback inside)
+        // 2) Login frequency (last 30 days) — prefer public view; fallback to zeros
         try {
           const end = new Date();
           const start = new Date(end.getTime() - 29 * 86400000);
-          const rows = await fetchLoginFrequency(start, end);
-          if (alive) {
-            setLoginSeries(
-              rows.map((r) => ({
-                date: fmtDayLabel(r.day),
-                athletes: Number(r.athlete ?? 0),
-                coaches: Number(r.coach ?? 0),
-              }))
-            );
+
+          const { data, error } = await supabase
+            .from("vw_daily_login_frequency")
+            .select("day, athlete, coach")
+            .gte("day", ymd(start))
+            .lte("day", ymd(end))
+            .order("day", { ascending: true });
+
+          if (!error && Array.isArray(data)) {
+            const rows = data as Array<{ day: string; athlete?: number | null; coach?: number | null }>;
+            if (alive) {
+              setLoginSeries(
+                rows.map((r) => ({
+                  date: fmtDayLabel(r.day),
+                  athletes: Number(r.athlete ?? 0),
+                  coaches: Number(r.coach ?? 0),
+                }))
+              );
+            }
+          } else if (relationMissing(error)) {
+            // view not present → zeros baseline
+            const zeros: LoginPoint[] = [];
+            for (let i = 29; i >= 0; i--) {
+              const d = new Date(Date.now() - i * 86400000);
+              zeros.push({ date: fmtDayLabel(d.toISOString()), athletes: 0, coaches: 0 });
+            }
+            if (alive) setLoginSeries(zeros);
           }
         } catch {
-          // If service fails, do nothing (keeps empty chart)
+          const zeros: LoginPoint[] = [];
+          for (let i = 29; i >= 0; i--) {
+            const d = new Date(Date.now() - i * 86400000);
+            zeros.push({ date: fmtDayLabel(d.toISOString()), athletes: 0, coaches: 0 });
+          }
+          if (alive) setLoginSeries(zeros);
         }
       } finally {
         if (alive) setLoading(false);
@@ -324,6 +316,8 @@ export default function Dashboard() {
         backgroundSize: "14px 14px",
       }}
     >
+      {/* Hide scrollbar CSS (keeps scroll behavior without showing bars) */}
+      <style dangerouslySetInnerHTML={{ __html: HIDE_SCROLL_CSS }} />
       {/* Navbar UI is unchanged; it can pick up avatar from global/localStorage if supported */}
       <Navbar />
       <main className="flex-1 w-full px-6 py-10">
@@ -350,7 +344,8 @@ export default function Dashboard() {
                 <KPI label="Active Users" value={activeUsers} delta="+0.03%" />
               </div>
 
-              <div className="h-[28rem]">
+              {/* Keep scroll behavior if content gets wider, but hide scrollbar UI */}
+              <div className="h-[28rem] scroll-x-clean">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={usageSeries}>
                     <XAxis dataKey="time" tick={{ fontSize: 12 }} />
@@ -388,7 +383,8 @@ export default function Dashboard() {
                 </Button>
               }
             >
-              <div className="h-[35rem]">
+              {/* Keep scroll behavior if content gets wider, but hide scrollbar UI */}
+              <div className="h-[35rem] scroll-x-clean">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={loginSeries}>
                     <XAxis dataKey="date" tick={{ fontSize: 14 }} />

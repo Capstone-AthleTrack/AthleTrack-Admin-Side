@@ -42,6 +42,9 @@ export type VPerfOverview = {
   power: number | null;
   agility: number | null;
   stamina: number | null;
+  flexibility: number | null;
+  coordination: number | null;
+  reactionTime: number | null;
   average: number | null;
 };
 
@@ -94,41 +97,129 @@ export async function loadSportBundle(
   prepost: VPrePostOverview[];
   performance: VPerfOverview[];
 }> {
-  const [coaches, athletes, prepost, performance] = await Promise.all([
+  console.log("[loadSportBundle] Fetching data for sport_slug:", slug);
+
+  // Convert slug to sport name for profiles table matching
+  // e.g., "basketball" -> "basketball", "beach-volleyball" -> "beach volleyball"
+  const sportName = slug.replace(/-/g, " ");
+
+  // Step 1: Get coaches and athletes from profiles table directly
+  const [coachesResult, athletesResult] = await Promise.all([
     supabase
-      .from("v_sport_coaches")
-      .select("*")
-      .eq("sport_slug", slug)
-      .returns<VCoach[]>(),
+      .from("profiles")
+      .select("id, full_name, email, phone")
+      .ilike("sport", sportName)
+      .eq("role", "coach"),
     supabase
-      .from("v_sport_athletes")
-      .select("*")
-      .eq("sport_slug", slug)
-      .returns<VAthleteLite[]>(),
-    supabase
-      .from("v_sport_prepost_overview")
-      .select("*")
-      .eq("sport_slug", slug)
-      .returns<VPrePostOverview[]>(),
-    supabase
-      .from("v_sport_performance_overview")
-      .select("*")
-      .eq("sport_slug", slug)
-      .order("week", { ascending: true })
-      .returns<VPerfOverview[]>(),
+      .from("profiles")
+      .select("id, full_name, pup_id, email, phone, role, birthdate")
+      .ilike("sport", sportName)
+      .eq("role", "athlete"),
   ]);
 
-  if (coaches.error) throw coaches.error;
-  if (athletes.error) throw athletes.error;
-  if (prepost.error) throw prepost.error;
-  if (performance.error) throw performance.error;
+  if (coachesResult.error) throw coachesResult.error;
+  if (athletesResult.error) throw athletesResult.error;
 
-  return {
-    coaches: coaches.data ?? [],
-    athletes: athletes.data ?? [],
-    prepost: prepost.data ?? [],
-    performance: performance.data ?? [],
-  };
+  // Map to expected types
+  const coaches: VCoach[] = (coachesResult.data ?? []).map((c) => ({
+    sport_slug: slug,
+    coach_id: c.id,
+    full_name: c.full_name,
+    email: c.email,
+    phone: c.phone,
+  }));
+
+  const athletes: VAthleteLite[] = (athletesResult.data ?? []).map((a) => ({
+    sport_slug: slug,
+    athlete_id: a.id, // Use 'id' from profiles as athlete_id
+    full_name: a.full_name,
+    pup_id: a.pup_id,
+    pup_webmail: a.email,
+    phone: a.phone,
+    role: a.role,
+    birthdate: a.birthdate,
+  }));
+
+  // Get athlete IDs for querying their data
+  const athleteIds = athletes.map((a) => a.athlete_id);
+
+  // Step 2: Get pre/post test data directly from athlete_tests table
+  // Step 3: Get performance data directly from athlete_fitness_progress table
+  const [testsResult, fitnessResult] = await Promise.all([
+    athleteIds.length > 0
+      ? supabase
+          .from("athlete_tests")
+          .select("user_id, pre_test, post_test")
+          .in("user_id", athleteIds)
+      : Promise.resolve({ data: [], error: null }),
+    athleteIds.length > 0
+      ? supabase
+          .from("athlete_fitness_progress")
+          .select("user_id, day, strength, power, agility, flexibility, coordination, reaction_time, average")
+          .in("user_id", athleteIds)
+          .order("day", { ascending: true })
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  if (testsResult.error) throw testsResult.error;
+  if (fitnessResult.error) throw fitnessResult.error;
+
+  // Aggregate pre/post test data per athlete (average of all their tests)
+  const testsByAthlete = new Map<string, { preSums: number; postSums: number; count: number }>();
+  for (const t of testsResult.data ?? []) {
+    const existing = testsByAthlete.get(t.user_id) ?? { preSums: 0, postSums: 0, count: 0 };
+    existing.preSums += Number(t.pre_test) || 0;
+    existing.postSums += Number(t.post_test) || 0;
+    existing.count += 1;
+    testsByAthlete.set(t.user_id, existing);
+  }
+
+  const prepost: VPrePostOverview[] = Array.from(testsByAthlete.entries()).map(([id, agg]) => ({
+    sport_slug: slug,
+    athlete_id: id,
+    pre_avg: agg.count > 0 ? agg.preSums / agg.count : null,
+    post_avg: agg.count > 0 ? agg.postSums / agg.count : null,
+  }));
+
+  // Aggregate performance data by day (average across all athletes per day)
+  const perfByDay = new Map<string, { strength: number; power: number; agility: number; flexibility: number; coordination: number; reactionTime: number; average: number; count: number }>();
+  for (const f of fitnessResult.data ?? []) {
+    const dayKey = f.day;
+    const existing = perfByDay.get(dayKey) ?? { strength: 0, power: 0, agility: 0, flexibility: 0, coordination: 0, reactionTime: 0, average: 0, count: 0 };
+    existing.strength += Number(f.strength) || 0;
+    existing.power += Number(f.power) || 0;
+    existing.agility += Number(f.agility) || 0;
+    existing.flexibility += Number(f.flexibility) || 0;
+    existing.coordination += Number(f.coordination) || 0;
+    existing.reactionTime += Number(f.reaction_time) || 0;
+    existing.average += Number(f.average) || 0;
+    existing.count += 1;
+    perfByDay.set(dayKey, existing);
+  }
+
+  const performance: VPerfOverview[] = Array.from(perfByDay.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([day, agg]) => ({
+      sport_slug: slug,
+      week: day,
+      strength: agg.count > 0 ? Math.round(agg.strength / agg.count * 10) / 10 : null,
+      power: agg.count > 0 ? Math.round(agg.power / agg.count * 10) / 10 : null,
+      agility: agg.count > 0 ? Math.round(agg.agility / agg.count * 10) / 10 : null,
+      stamina: agg.count > 0 ? Math.round(agg.flexibility / agg.count * 10) / 10 : null,
+      flexibility: agg.count > 0 ? Math.round(agg.flexibility / agg.count * 10) / 10 : null,
+      coordination: agg.count > 0 ? Math.round(agg.coordination / agg.count * 10) / 10 : null,
+      reactionTime: agg.count > 0 ? Math.round(agg.reactionTime / agg.count * 10) / 10 : null,
+      average: agg.count > 0 ? Math.round(agg.average / agg.count * 10) / 10 : null,
+    }));
+
+  // Debug logging
+  console.log("[loadSportBundle] Results for slug:", slug);
+  console.log("  - coaches:", coaches.length, "rows");
+  console.log("  - athletes:", athletes.length, "rows");
+  console.log("  - prepost (from athlete_tests):", prepost.length, "rows", prepost);
+  console.log("  - performance (from athlete_fitness_progress):", performance.length, "rows", performance);
+
+  return { coaches, athletes, prepost, performance };
 }
 
 export async function loadAthleteBundle(
@@ -178,6 +269,9 @@ export type ChartPerfLine = {
   power: number;
   strength: number;
   stamina: number;
+  flexibility: number;
+  coordination: number;
+  reactionTime: number;
   average: number;
 };
 export type ChartAthletePrePost = { label: number | string; preTest: number; postTest: number };
@@ -211,6 +305,9 @@ export function shapePerfLines(rows: VPerfOverview[]): ChartPerfLine[] {
     power: r.power ?? 0,
     strength: r.strength ?? 0,
     stamina: r.stamina ?? 0,
+    flexibility: r.flexibility ?? 0,
+    coordination: r.coordination ?? 0,
+    reactionTime: r.reactionTime ?? 0,
     average: r.average ?? 0,
   }));
 }
