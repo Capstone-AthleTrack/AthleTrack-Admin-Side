@@ -592,19 +592,51 @@ export default function SportDetail() {
     }));
   }, [athletes, prepost]);
 
-  // Your existing legend expects agility/strength/power/flexibility/reactionTime/coordination.
-  // Live DB provides agility/power/strength (+ optional stamina/average). Keep others as 0 to preserve UI.
+  // Aggregate performance data by week for cleaner visualization
   const performanceDisplay = useMemo(() => {
     if (performance.length) {
-      return performance.map((r) => ({
-        name: r.week,
-        agility: r.agility,
-        strength: r.strength,
-        power: r.power,
-        flexibility: 0,
-        reactionTime: 0,
-        coordination: 0,
-      }));
+      // Group data by week (using week number from date)
+      const byWeek = new Map<string, { agility: number[]; strength: number[]; power: number[]; flexibility: number[]; reactionTime: number[]; coordination: number[] }>();
+      
+      for (const r of performance) {
+        const date = new Date(r.week);
+        // Get week start (Monday) for grouping
+        const weekStart = new Date(date);
+        weekStart.setDate(date.getDate() - date.getDay() + 1);
+        const weekKey = weekStart.toISOString().split('T')[0];
+        
+        if (!byWeek.has(weekKey)) {
+          byWeek.set(weekKey, { agility: [], strength: [], power: [], flexibility: [], reactionTime: [], coordination: [] });
+        }
+        const week = byWeek.get(weekKey)!;
+        week.agility.push(r.agility);
+        week.strength.push(r.strength);
+        week.power.push(r.power);
+        // Use real data from database
+        week.flexibility.push(r.stamina ?? 0);
+        week.reactionTime.push((r as unknown as { reactionTime?: number }).reactionTime ?? 0);
+        week.coordination.push((r as unknown as { coordination?: number }).coordination ?? 0);
+      }
+      
+      // Calculate averages per week and format nicely
+      return Array.from(byWeek.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([weekKey, data]) => {
+          const avg = (arr: number[]) => arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length * 10) / 10 : 0;
+          const date = new Date(weekKey);
+          // Format as "Mon DD" for better readability
+          const formatted = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          return {
+            name: formatted,
+            fullDate: weekKey,
+            agility: avg(data.agility),
+            strength: avg(data.strength),
+            power: avg(data.power),
+            flexibility: avg(data.flexibility),
+            reactionTime: avg(data.reactionTime),
+            coordination: avg(data.coordination),
+          };
+        });
     }
     return [...(sport?.performanceData ?? [])];
   }, [performance, sport]);
@@ -922,16 +954,82 @@ export default function SportDetail() {
 
             <div ref={prepostChartRef}>
               <ResponsiveContainer width="100%" height={400}>
-                <BarChart data={prepostDisplay}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="preTest" fill={BRAND.maroon} barSize={40} />
-                  <Bar dataKey="postTest" fill={BRAND.yellow} barSize={40} />
+                <BarChart data={prepostDisplay} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                  <XAxis 
+                    dataKey="name" 
+                    tick={{ fontSize: 11, fill: '#374151' }}
+                    angle={-35}
+                    textAnchor="end"
+                    height={80}
+                    interval={0}
+                    tickFormatter={(value) => {
+                      // Truncate long names
+                      const str = String(value);
+                      return str.length > 15 ? str.slice(0, 12) + '...' : str;
+                    }}
+                  />
+                  <YAxis 
+                    tick={{ fontSize: 12, fill: '#374151' }}
+                    domain={[0, 'auto']}
+                    tickFormatter={(value) => `${value}`}
+                    label={{ value: 'Score', angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: '#6B7280', fontSize: 12 } }}
+                  />
+                  <Tooltip 
+                    contentStyle={{ 
+                      backgroundColor: '#FFFFFF', 
+                      border: '1px solid #E5E7EB', 
+                      borderRadius: '8px',
+                      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
+                    }}
+                    formatter={(value: number, name: string) => {
+                      const label = name === 'preTest' ? 'Pre-Test' : 'Post-Test';
+                      return [`${Math.round(value * 10) / 10}`, label];
+                    }}
+                    labelFormatter={(label) => `Athlete: ${label}`}
+                  />
+                  <Legend 
+                    verticalAlign="top"
+                    height={36}
+                    formatter={(value) => value === 'preTest' ? 'Pre-Test' : 'Post-Test'}
+                  />
+                  <Bar 
+                    dataKey="preTest" 
+                    name="preTest"
+                    fill={BRAND.maroon} 
+                    barSize={35}
+                    radius={[4, 4, 0, 0]}
+                  />
+                  <Bar 
+                    dataKey="postTest" 
+                    name="postTest"
+                    fill={BRAND.yellow} 
+                    barSize={35}
+                    radius={[4, 4, 0, 0]}
+                  />
                 </BarChart>
               </ResponsiveContainer>
+              {/* Summary stats */}
+              <div className="flex justify-center gap-8 mt-4 text-sm text-gray-600">
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded" style={{ backgroundColor: BRAND.maroon }}></div>
+                  <span>Avg Pre-Test: <strong>{prepostDisplay.length ? Math.round(prepostDisplay.reduce((a, b) => a + (b.preTest || 0), 0) / prepostDisplay.length * 10) / 10 : 0}</strong></span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded" style={{ backgroundColor: BRAND.yellow }}></div>
+                  <span>Avg Post-Test: <strong>{prepostDisplay.length ? Math.round(prepostDisplay.reduce((a, b) => a + (b.postTest || 0), 0) / prepostDisplay.length * 10) / 10 : 0}</strong></span>
+                </div>
+                {prepostDisplay.length > 0 && (() => {
+                  const avgPre = prepostDisplay.reduce((a, b) => a + (b.preTest || 0), 0) / prepostDisplay.length;
+                  const avgPost = prepostDisplay.reduce((a, b) => a + (b.postTest || 0), 0) / prepostDisplay.length;
+                  const change = avgPre > 0 ? ((avgPost - avgPre) / avgPre * 100) : 0;
+                  return (
+                    <div className={`flex items-center gap-1 font-semibold ${change >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      <span>{change >= 0 ? '↑' : '↓'} {Math.abs(Math.round(change * 10) / 10)}% Change</span>
+                    </div>
+                  );
+                })()}
+              </div>
             </div>
           </div>
 
@@ -1011,23 +1109,130 @@ export default function SportDetail() {
             </div>
 
             <div ref={performanceChartRef}>
-              <ResponsiveContainer width="100%" height={400}>
-                <LineChart data={performanceDisplay}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
+              <ResponsiveContainer width="100%" height={420}>
+                <LineChart data={performanceDisplay} margin={{ top: 20, right: 30, left: 20, bottom: 20 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+                  <XAxis 
+                    dataKey="name" 
+                    tick={{ fontSize: 11, fill: '#374151' }}
+                    tickMargin={10}
+                  />
+                  <YAxis 
+                    tick={{ fontSize: 12, fill: '#374151' }}
+                    domain={[0, 100]}
+                    tickFormatter={(value) => `${value}`}
+                    label={{ value: 'Score', angle: -90, position: 'insideLeft', style: { textAnchor: 'middle', fill: '#6B7280', fontSize: 12 } }}
+                  />
+                  <Tooltip 
+                    contentStyle={{ 
+                      backgroundColor: '#FFFFFF', 
+                      border: '1px solid #E5E7EB', 
+                      borderRadius: '8px',
+                      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+                      padding: '12px'
+                    }}
+                    formatter={(value: number, name: string) => {
+                      const labels: Record<string, string> = {
+                        agility: '🏃 Agility',
+                        strength: '💪 Strength', 
+                        power: '⚡ Power',
+                        flexibility: '🧘 Flexibility',
+                        reactionTime: '⏱️ Reaction Time',
+                        coordination: '🎯 Coordination'
+                      };
+                      return [`${Math.round(value * 10) / 10}`, labels[name] || name];
+                    }}
+                    labelFormatter={(label) => `Week of ${label}`}
+                  />
+                  <Legend 
+                    verticalAlign="bottom"
+                    height={36}
+                    iconType="circle"
+                    formatter={(value) => {
+                      const labels: Record<string, string> = {
+                        agility: 'Agility',
+                        strength: 'Strength', 
+                        power: 'Power',
+                        flexibility: 'Flexibility',
+                        reactionTime: 'Reaction',
+                        coordination: 'Coordination'
+                      };
+                      return labels[value] || value;
+                    }}
+                  />
 
-                  {/* Metrics */}
-                  <Line type="monotone" dataKey="agility" stroke="#008000" />        {/* green */}
-                  <Line type="monotone" dataKey="strength" stroke={BRAND.maroon} />  {/* maroon */}
-                  <Line type="monotone" dataKey="power" stroke="#1E90FF" />          {/* blue */}
-                  <Line type="monotone" dataKey="flexibility" stroke="#FF69B4" />    {/* pink */}
-                  <Line type="monotone" dataKey="reactionTime" stroke="#FFA500" />   {/* orange */}
-                  <Line type="monotone" dataKey="coordination" stroke="#800080" />   {/* purple */}
+                  {/* Core Metrics with improved styling */}
+                  <Line 
+                    type="monotone" 
+                    dataKey="agility" 
+                    stroke="#10B981" 
+                    strokeWidth={2.5}
+                    dot={{ r: 4, fill: '#10B981' }}
+                    activeDot={{ r: 6, stroke: '#10B981', strokeWidth: 2 }}
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="strength" 
+                    stroke={BRAND.maroon} 
+                    strokeWidth={2.5}
+                    dot={{ r: 4, fill: BRAND.maroon }}
+                    activeDot={{ r: 6, stroke: BRAND.maroon, strokeWidth: 2 }}
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="power" 
+                    stroke="#3B82F6" 
+                    strokeWidth={2.5}
+                    dot={{ r: 4, fill: '#3B82F6' }}
+                    activeDot={{ r: 6, stroke: '#3B82F6', strokeWidth: 2 }}
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="flexibility" 
+                    stroke="#EC4899" 
+                    strokeWidth={2}
+                    dot={{ r: 3, fill: '#EC4899' }}
+                    strokeDasharray="5 5"
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="reactionTime" 
+                    stroke="#F59E0B" 
+                    strokeWidth={2}
+                    dot={{ r: 3, fill: '#F59E0B' }}
+                    strokeDasharray="5 5"
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="coordination" 
+                    stroke="#8B5CF6" 
+                    strokeWidth={2}
+                    dot={{ r: 3, fill: '#8B5CF6' }}
+                    strokeDasharray="5 5"
+                  />
                 </LineChart>
               </ResponsiveContainer>
+              {/* Performance Summary */}
+              {performanceDisplay.length > 1 && (
+                <div className="flex flex-wrap justify-center gap-4 mt-4 text-sm">
+                  {['agility', 'strength', 'power'].map((metric) => {
+                    const first = performanceDisplay[0]?.[metric as keyof typeof performanceDisplay[0]] as number || 0;
+                    const last = performanceDisplay[performanceDisplay.length - 1]?.[metric as keyof typeof performanceDisplay[0]] as number || 0;
+                    const change = first > 0 ? ((last - first) / first * 100) : 0;
+                    const colors: Record<string, string> = { agility: '#10B981', strength: BRAND.maroon, power: '#3B82F6' };
+                    const labels: Record<string, string> = { agility: 'Agility', strength: 'Strength', power: 'Power' };
+                    return (
+                      <div key={metric} className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-full">
+                        <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: colors[metric] }}></div>
+                        <span className="text-gray-600">{labels[metric]}:</span>
+                        <span className={`font-semibold ${change >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                          {change >= 0 ? '↑' : '↓'} {Math.abs(Math.round(change))}%
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
         </div>
