@@ -1,4 +1,5 @@
 // src/services/metrics.ts
+
 // Data access for Reports cards + Login Frequency + CSV (no UI edits).
 // Assumes: path alias "@" -> /src and a named export { supabase } from "@/core/supabase"
 
@@ -55,18 +56,17 @@ function todayPH(): Date {
 // ---- Logging RPCs ------------------------------------------------------------
 
 /** Call from Athlete/Coach apps on app start/resume. Admins are ignored by RPC. */
-export async function logSession(platform: string = "web"): Promise<string | null> {
-  const { data, error } = await supabase.rpc("rpc_log_session", { _platform: platform });
+export async function logSession(platform: string = "web"): Promise<void> {
+  const { error } = await supabase.rpc("rpc_log_session", { _platform: platform });
   if (error) throw error;
-  // Returns the inserted id or null when role is not athlete/coach
-  return (data as string | null) ?? null;
+  // RPC returns void; admins are silently skipped
 }
 
 /** Call after successful Athlete/Coach sign-in. Admins are ignored by RPC. */
-export async function logLogin(): Promise<string | null> {
-  const { data, error } = await supabase.rpc("rpc_log_login");
+export async function logLogin(): Promise<void> {
+  const { error } = await supabase.rpc("rpc_log_login");
   if (error) throw error;
-  return (data as string | null) ?? null;
+  // RPC returns void; admins are silently skipped
 }
 
 // ---- Cards / Charts ----------------------------------------------------------
@@ -117,7 +117,7 @@ export async function fetchLoginFrequency(
 
   if (error) throw error;
 
-  const rows = ((data ?? []) as VwDailyLoginFrequencyRow[]);
+  const rows = (data ?? []) as VwDailyLoginFrequencyRow[];
 
   const byDay: Record<string, { athlete: number; coach: number }> = {};
   for (const row of rows) {
@@ -125,7 +125,7 @@ export async function fetchLoginFrequency(
     const role: "athlete" | "coach" = row.role;
     const cnt = Number(row.logins ?? 0);
     if (!byDay[dayKey]) byDay[dayKey] = { athlete: 0, coach: 0 };
-    byDay[dayKey][role] = cnt; // role is 'athlete' | 'coach'
+    byDay[dayKey][role] = cnt;
   }
 
   // Ensure continuity: include days with 0s
@@ -157,7 +157,7 @@ export async function getReportsCSVRows(params?: {
   });
   if (error) throw error;
 
-  const rows = ((data ?? []) as AdminExportAppVisitsRow[]);
+  const rows = (data ?? []) as AdminExportAppVisitsRow[];
   return rows.map((r) => ({
     day: r.day,
     visits: Number(r.visits ?? 0),
@@ -179,7 +179,7 @@ export async function getLoginCSVRows(params?: {
   });
   if (error) throw error;
 
-  const rows = ((data ?? []) as AdminExportLoginFrequencyRow[]);
+  const rows = (data ?? []) as AdminExportLoginFrequencyRow[];
 
   // pivot to day -> athletes/coaches
   const byDay: Record<string, { athletes: number; coaches: number }> = {};

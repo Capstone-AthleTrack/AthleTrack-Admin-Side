@@ -1,7 +1,7 @@
 // src/pages/Dashboard.tsx (admin)
+
 // Patch: no UI changes. Hide horizontal scrollbars; avoid failing endpoints;
 // build charts from safe public views with graceful fallbacks.
-
 import { Card, Button, Tabs } from "antd";
 import type { TabsProps } from "antd";
 import {
@@ -20,38 +20,30 @@ import { supabase } from "@/core/supabase";
 import { exportReportsCSV, exportLoginCSV } from "@/services/metrics";
 /* Avatars: get a signed URL for the logged-in admin (no UI changes) */
 import { bulkSignedByUserIds } from "@/services/avatars";
-
 /* Augment window to carry the optional navbar avatar URL without `any` */
 declare global {
   interface Window {
     __NAVBAR_AVATAR_URL__?: string;
   }
 }
-
 /* ----------------------------- Local types ------------------------------ */
-
 type UsagePoint = { time: string; active: number; visits: number };
 type LoginPoint = { date: string; coaches: number; athletes: number };
-
 type SummaryRow = {
   total_users: number;
   app_visits: number;
   new_users: number;
   active_users: number;
 };
-
 /* ----------------------------- Helpers ---------------------------------- */
-
 // PH timezone helpers (UTC+8, no DST)
 const PH_OFFSET_MS = 8 * 60 * 60 * 1000;
-
 function ymd(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${dd}`;
 }
-
 function dayBoundsPH(d: Date): { fromIso: string; toIso: string; day: string } {
   const y = d.getFullYear();
   const m = d.getMonth();
@@ -60,12 +52,10 @@ function dayBoundsPH(d: Date): { fromIso: string; toIso: string; day: string } {
   const toUtc = new Date(Date.UTC(y, m, dd + 1, -8, 0, 0, 0));
   return { fromIso: fromUtc.toISOString(), toIso: toUtc.toISOString(), day: ymd(d) };
 }
-
 function toPH(utcIso: string): Date {
   const t = new Date(utcIso).getTime();
   return new Date(t + PH_OFFSET_MS);
 }
-
 function fmt(n: number | undefined | null) {
   if (typeof n !== "number") return "0";
   try {
@@ -82,36 +72,29 @@ function fmtDayLabel(ts: string) {
   const label = d.toLocaleString("en-US", { month: "long", day: "2-digit" });
   return label.toUpperCase();
 }
-
 type PostgrestErrorLike = { code?: string; message?: string };
 function relationMissing(error: PostgrestErrorLike | null | undefined): boolean {
   return !!error && (error.code === "42P01" || /relation .* does not exist/i.test(error.message || ""));
 }
-
 /* ----------------------------- Component -------------------------------- */
-
 export default function Dashboard() {
   const tabItems: TabsProps["items"] = [
     { key: "Daily", label: <span className="text-base">Daily</span> },
     { key: "Weekly", label: <span className="text-base">Weekly</span> },
     { key: "Monthly", label: <span className="text-base">Monthly</span> },
   ];
-
   // ---- live data state (UI preserved) ----
   const [kpi, setKpi] = useState<SummaryRow | null>(null);
   const [usageSeries, setUsageSeries] = useState<UsagePoint[]>([]);
   const [loginSeries, setLoginSeries] = useState<LoginPoint[]>([]);
   const [loading, setLoading] = useState(false);
-
   // Logged-in admin avatar (signed URL)
   const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
-
   // Small helper CSS to keep horizontal scrolling but hide the scrollbar UI
   const HIDE_SCROLL_CSS = `
     .scroll-x-clean { overflow-x: auto; -ms-overflow-style: none; scrollbar-width: none; }
     .scroll-x-clean::-webkit-scrollbar { display: none; }
   `;
-
   // Resolve current user and sign their avatar for the Navbar (no UI change)
   useEffect(() => {
     let alive = true;
@@ -131,7 +114,6 @@ export default function Dashboard() {
       alive = false;
     };
   }, []);
-
   // Optionally expose the avatar URL globally so a NavBar that listens can pick it up
   useEffect(() => {
     if (!avatarUrl) return;
@@ -143,17 +125,14 @@ export default function Dashboard() {
       /* ignore */
     }
   }, [avatarUrl]);
-
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
         setLoading(true);
-
         // 1) KPI cards
         const today = new Date();
         const { fromIso: phStartIso, toIso: phEndIso } = dayBoundsPH(today);
-
         // Total users (exact count)
         let totalUsers = 0;
         {
@@ -162,7 +141,6 @@ export default function Dashboard() {
             .select("*", { count: "exact", head: true });
           if (!error && typeof count === "number") totalUsers = count;
         }
-
         // New users today (created_at or inserted_at)
         let newUsers = 0;
         {
@@ -185,7 +163,6 @@ export default function Dashboard() {
             if (!r2.error && typeof r2.count === "number") newUsers = r2.count;
           }
         }
-
         // Usage + KPI (app visits / active users) from public view v_daily_activity_24h
         let appVisits = 0;
         let activeUsers = 0;
@@ -195,7 +172,6 @@ export default function Dashboard() {
               .from("v_daily_activity_24h")
               .select("bucket, active_users, session_starts")
               .order("bucket", { ascending: true });
-
             if (!error && Array.isArray(data)) {
               const mapped: UsagePoint[] = (data as Array<{
                 bucket: string;
@@ -212,7 +188,6 @@ export default function Dashboard() {
                   visits: Number(r.session_starts ?? 0),
                 };
               });
-
               if (alive) setUsageSeries(mapped);
               appVisits = mapped.reduce((s, v) => s + (v.visits || 0), 0);
               // max active in any hour (or sum—choose max to mirror "concurrent-ish")
@@ -238,7 +213,6 @@ export default function Dashboard() {
             if (alive) setUsageSeries(buckets);
           }
         }
-
         if (alive) {
           setKpi({
             total_users: totalUsers,
@@ -247,30 +221,43 @@ export default function Dashboard() {
             active_users: activeUsers,
           });
         }
-
-        // 2) Login frequency (last 30 days) — prefer public view; fallback to zeros
+        // 2) Login frequency (last 30 days) — view returns { day, role, logins }
         try {
           const end = new Date();
           const start = new Date(end.getTime() - 29 * 86400000);
-
           const { data, error } = await supabase
             .from("vw_daily_login_frequency")
-            .select("day, athlete, coach")
+            .select("day, role, logins")
             .gte("day", ymd(start))
             .lte("day", ymd(end))
-            .order("day", { ascending: true });
-
+            .order("day", { ascending: true })
+            .order("role", { ascending: true });
           if (!error && Array.isArray(data)) {
-            const rows = data as Array<{ day: string; athlete?: number | null; coach?: number | null }>;
-            if (alive) {
-              setLoginSeries(
-                rows.map((r) => ({
-                  date: fmtDayLabel(r.day),
-                  athletes: Number(r.athlete ?? 0),
-                  coaches: Number(r.coach ?? 0),
-                }))
-              );
+            // Pivot rows: { day, role, logins } → { date, athletes, coaches }
+            const rows = data as Array<{ day: string; role: string; logins: number | null }>;
+            const byDay: Record<string, { athletes: number; coaches: number }> = {};
+            for (const r of rows) {
+              const dayKey = r.day;
+              if (!byDay[dayKey]) byDay[dayKey] = { athletes: 0, coaches: 0 };
+              const cnt = Number(r.logins ?? 0);
+              if (r.role === "athlete") byDay[dayKey].athletes = cnt;
+              else if (r.role === "coach") byDay[dayKey].coaches = cnt;
             }
+            // Build continuous series with 0s for missing days
+            const series: LoginPoint[] = [];
+            const cur = new Date(start);
+            const endDate = new Date(end);
+            while (cur <= endDate) {
+              const key = ymd(cur);
+              const row = byDay[key] ?? { athletes: 0, coaches: 0 };
+              series.push({
+                date: fmtDayLabel(cur.toISOString()),
+                athletes: row.athletes,
+                coaches: row.coaches,
+              });
+              cur.setDate(cur.getDate() + 1);
+            }
+            if (alive) setLoginSeries(series);
           } else if (relationMissing(error)) {
             // view not present → zeros baseline
             const zeros: LoginPoint[] = [];
@@ -292,21 +279,17 @@ export default function Dashboard() {
         if (alive) setLoading(false);
       }
     })();
-
     return () => {
       alive = false;
     };
   }, []);
-
   // CSV handlers (admin-only RPCs under the hood or direct-table)
   const exportUsageCsv = () => exportReportsCSV();
   const exportLoginCsv = () => exportLoginCSV();
-
   const totalUsers = useMemo(() => fmt(kpi?.total_users), [kpi]);
   const appVisits = useMemo(() => fmt(kpi?.app_visits), [kpi]);
   const newUsers = useMemo(() => fmt(kpi?.new_users), [kpi]);
   const activeUsers = useMemo(() => fmt(kpi?.active_users), [kpi]);
-
   return (
     <div
       className="min-h-screen w-full flex flex-col text-[#111]"
@@ -343,7 +326,6 @@ export default function Dashboard() {
                 <KPI label="New Users" value={newUsers} delta="+0.05%" />
                 <KPI label="Active Users" value={activeUsers} delta="+0.03%" />
               </div>
-
               {/* Keep scroll behavior if content gets wider, but hide scrollbar UI */}
               <div className="h-[28rem] scroll-x-clean">
                 <ResponsiveContainer width="100%" height="100%">
@@ -372,7 +354,6 @@ export default function Dashboard() {
                 </ResponsiveContainer>
               </div>
             </Card>
-
             <Card
               title={<span className="text-2xl font-semibold">Login Frequency</span>}
               className="rounded-2xl shadow-lg"
@@ -403,7 +384,6 @@ export default function Dashboard() {
     </div>
   );
 }
-
 function KPI({ label, value, delta }: { label: string; value: string; delta: string }) {
   return (
     <div className="rounded-xl bg-[#fafafa] border p-4 transition-all duration-200 ease-in-out hover:shadow-md">
