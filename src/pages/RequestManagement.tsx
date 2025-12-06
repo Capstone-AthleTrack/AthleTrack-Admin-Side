@@ -12,31 +12,21 @@ import clsx from "clsx";
 import NavBar from "@/components/NavBar";
 
 /* 🔌 use ONLY the shared Supabase singleton so apikey/auth headers are present */
-import { supabase, getFunctionUrl, getFunctionHeaders } from "@/core/supabase";
+import { supabase } from "@/core/supabase";
+
+/* ---------- Offline-enabled services ---------- */
+import { fetchRequestsOffline, decideRequestOffline } from "@/services/offline";
+import { useNetworkStatus } from "@/hooks/useNetworkStatus";
+
+/* ---------- Avatars ---------- */
+import { bulkSignedByUserIds } from "@/services/avatars";
 
 /* ---------------- types + constants ---------------- */
 type ReqStatus = "Pending" | "Accepted" | "Denied";
 type ReqKind = "Users" | "AthleteRequests";
 type FinalRole = "athlete" | "coach" | "admin";
 
-/** Raw row shape from public.account_requests (safe minimal superset) */
-type DbReqRow = {
-  id: string;
-  user_id: string | null;
-  email: string | null;
-  full_name: string | null;
-  device_name: string | null;
-  desired_role: string | null;
-  status: string | null;
-  reason: string | null;
-  created_at: string | null;
-  decided_by?: string | null;
-  decided_at?: string | null;
-  // optional extras if present
-  phone?: string | null;
-  pup_id?: string | null;
-  sport?: string | null;
-};
+// DbReqRow type moved to requests.offline.ts
 
 type RequestItem = {
   id: string;
@@ -59,22 +49,7 @@ type RequestItem = {
   };
 };
 
-/** Minimal profile shape for name lookup (avoids `any`) */
-type MiniProfile = {
-  id: string;
-  full_name: string | null;
-  email: string | null;
-};
-
-/** Fallback profile shape when reading pending profiles */
-type FallbackProfile = {
-  id: string;
-  full_name: string | null;
-  email: string | null;
-  updated_at: string | null;
-  role: string | null;
-  status: string | null;
-};
+// MiniProfile and FallbackProfile types moved to requests.offline.ts
 
 const BRAND = { maroon: "#7b0f0f" };
 
@@ -89,12 +64,7 @@ function Labeled({ label, value }: { label: string; value?: string }) {
     </label>
   );
 }
-const toUiStatus = (s: string | null | undefined): ReqStatus =>
-  (s ?? "").toLowerCase() === "approved"
-    ? "Accepted"
-    : (s ?? "").toLowerCase() === "denied"
-    ? "Denied"
-    : "Pending";
+// toUiStatus helper moved to requests.offline.ts
 
 /* ---------------- page ---------------- */
 export default function RequestManagement() {
@@ -107,185 +77,63 @@ export default function RequestManagement() {
   // tie the existing Reason field to state
   const [reasonDraft, setReasonDraft] = useState("");
 
-  // ---- load from backend ----
+  /* offline status */
+  const { isOnline } = useNetworkStatus();
+  const [_fromCache, setFromCache] = useState(false);
+  void _fromCache; // Reserved for future offline indicator
+
+  /* avatar URLs by user_id */
+  const [avatarById, setAvatarById] = useState<Record<string, string>>({});
+
+  async function refreshAvatars(ids: string[]) {
+    const validIds = ids.filter(Boolean);
+    if (!validIds.length) return;
+    try {
+      const urls = await bulkSignedByUserIds(validIds, 60 * 60 * 24);
+      if (Object.keys(urls).length) {
+        setAvatarById((prev) => ({ ...prev, ...urls }));
+      }
+    } catch {
+      // ignore; avatars fall back to icon
+    }
+  }
+
+  // ---- load from backend (with offline caching) ----
   const refreshRequests = useCallback(async () => {
     try {
       setLoading(true);
 
-      // Try full column set first, then gracefully narrow if the table/view is missing some columns (prevents 400 Bad Request)
-      const selectFull = [
-        "id",
-        "user_id",
-        "email",
-        "full_name",
-        "device_name",
-        "desired_role",
-        "status",
-        "reason",
-        "created_at",
-        "decided_by",
-        "decided_at",
-        "phone",
-        "pup_id",
-        "sport",
-      ].join(",");
+      // Use offline-enabled fetch with caching
+      const result = await fetchRequestsOffline();
+      setFromCache(result.fromCache);
 
-      const selectBase = [
-        "id",
-        "user_id",
-        "email",
-        "full_name",
-        "device_name",
-        "desired_role",
-        "status",
-        "reason",
-        "created_at",
-      ].join(",");
-
-      let rowsRaw: unknown[] | null = null;
-
-      // attempt 1 — full superset
-      const resp = await supabase
-        .from("account_requests")
-        .select(selectFull)
-        .order("created_at", { ascending: false })
-        .range(0, 199); // <-- FIXED: single dot before range
-
-      if (resp.error) {
-        // attempt 2 — minimal base columns (handles schema drift)
-        const resp2 = await supabase
-          .from("account_requests")
-          .select(selectBase)
-          .order("created_at", { ascending: false })
-          .range(0, 199);
-
-        if (resp2.error) {
-          // attempt 3 — fallback to profiles pending (so the list never goes blank)
-          const fb = await supabase
-            .from("profiles")
-            .select("id,full_name,email,updated_at,role,status")
-            .eq("status", "pending")
-            .order("updated_at", { ascending: false })
-            .range(0, 199);
-
-          if (fb.error) throw fb.error;
-
-          const fallbackRows = (fb.data ?? []) as FallbackProfile[];
-          const mappedFromProfiles: RequestItem[] = fallbackRows.map((p) => ({
-            id: p.id,
-            kind: "Users",
-            name: p.full_name || "",
-            email: p.email || undefined,
-            deviceName: undefined,
-            issuedAt: p.updated_at || new Date().toISOString(),
-            status: "Pending",
-            reason: "",
-            extra: {
-              userId: p.id,
-              role: p.role
-                ? `${String(p.role).charAt(0).toUpperCase()}${String(p.role).slice(1)}`
-                : "Athlete",
-            },
-          }));
-          setData(mappedFromProfiles);
-          // clear selection safely without capturing selectedId
-          setSelectedId((prev) =>
-            prev && !mappedFromProfiles.find((m) => m.id === prev) ? null : prev
-          );
-          return;
-        } else {
-          rowsRaw = resp2.data ?? [];
-        }
-      } else {
-        rowsRaw = resp.data ?? [];
-      }
-
-      const rows = (Array.isArray(rowsRaw) ? rowsRaw : []) as unknown as DbReqRow[];
-
-      // 🔁 Soft fallback if table exists but has 0 rows (show pending profiles)
-      if (!rows.length) {
-        const fb2 = await supabase
-          .from("profiles")
-          .select("id,full_name,email,updated_at,role,status")
-          .eq("status", "pending")
-          .order("updated_at", { ascending: false })
-          .range(0, 199);
-
-        if (!fb2.error) {
-          const pendingProfiles = (fb2.data ?? []) as FallbackProfile[];
-          const mappedFromProfiles: RequestItem[] = pendingProfiles.map((p) => ({
-            id: p.id,
-            kind: "Users",
-            name: p.full_name || "",
-            email: p.email || undefined,
-            deviceName: undefined,
-            issuedAt: p.updated_at || new Date().toISOString(),
-            status: "Pending",
-            reason: "",
-            extra: {
-              userId: p.id,
-              role: p.role
-                ? `${String(p.role).charAt(0).toUpperCase()}${String(p.role).slice(1)}`
-                : "Athlete",
-            },
-          }));
-          setData(mappedFromProfiles);
-          setSelectedId((prev) =>
-            prev && !mappedFromProfiles.find((m) => m.id === prev) ? null : prev
-          );
-          return;
-        }
-      }
-
-      // fetch names of deciding admins (if any)
-      const adminIds = Array.from(
-        new Set(rows.map((r) => r.decided_by).filter((v): v is string => !!v))
-      );
-
-      let decidedNameById: Record<string, string> = {};
-      if (adminIds.length) {
-        const { data: admins, error: adminErr } = await supabase
-          .from("profiles")
-          .select("id,full_name,email")
-          .in("id", adminIds);
-
-        if (adminErr) throw adminErr;
-
-        const adminsTyped = (admins ?? []) as unknown as MiniProfile[];
-
-        decidedNameById = adminsTyped.reduce<Record<string, string>>((acc, p) => {
-          acc[p.id] = p.full_name || p.email || p.id;
-          return acc;
-        }, {});
-      }
-
-      const mapped: RequestItem[] = rows.map((r) => ({
+      // Map to the existing UI format (add 'kind' field)
+      const mapped: RequestItem[] = result.data.map((r) => ({
         id: r.id,
-        kind: "Users",
-        name: r.full_name || "",
-        email: r.email || undefined,
-        deviceName: r.device_name || undefined,
-        issuedAt: r.created_at || new Date().toISOString(),
-        status: toUiStatus(r.status),
-        reason: r.reason || "",
-        extra: {
-          userId: r.user_id || undefined,
-          role: r.desired_role
-            ? `${String(r.desired_role).charAt(0).toUpperCase()}${String(r.desired_role).slice(1)}`
-            : "Athlete",
-          pupId: r.pup_id || undefined,
-          sport: r.sport || undefined,
-          phone: r.phone || undefined,
-          decidedById: r.decided_by || undefined,
-          decidedByName: r.decided_by ? decidedNameById[r.decided_by] : undefined,
-          decidedAt: r.decided_at || undefined,
-        },
+        kind: "Users" as ReqKind,
+        name: r.name,
+        email: r.email,
+        deviceName: r.deviceName,
+        issuedAt: r.issuedAt,
+        status: r.status as ReqStatus,
+        reason: r.reason,
+        extra: r.extra,
       }));
 
       setData(mapped);
 
+      // Refresh avatars for users that have a userId
+      const userIds = mapped
+        .map((m) => m.extra?.userId)
+        .filter((id): id is string => !!id);
+      await refreshAvatars(userIds);
+
       // clear selection safely without capturing selectedId
       setSelectedId((prev) => (prev && !mapped.find((m) => m.id === prev) ? null : prev));
+
+      if (result.fromCache && result.isStale && !isOnline) {
+        message.info("Showing cached data (offline)");
+      }
     } catch (e) {
       if (e instanceof Error) {
         message.error(e.message);
@@ -295,7 +143,7 @@ export default function RequestManagement() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isOnline]);
 
   useEffect(() => {
     void refreshRequests();
@@ -332,7 +180,7 @@ export default function RequestManagement() {
     [data, selectedId]
   );
 
-  // ---- accept/deny wiring ----
+  // ---- accept/deny wiring (with offline queuing) ----
   const setStatus = async (id: string, status: ReqStatus, reason: string) => {
     const item = data.find((d) => d.id === id);
     if (!item) return;
@@ -344,12 +192,10 @@ export default function RequestManagement() {
     }
 
     try {
-      const { data: auth } = await supabase.auth.getUser();
-      const decidedAt = new Date().toISOString();
-
-      // 🔎 Determine the real account_requests row id (fallback if we built the list from profiles)
+      // Determine the real account_requests row id (fallback if we built the list from profiles)
       let requestId = id;
-      {
+      
+      if (isOnline) {
         const { data: reqById } = await supabase
           .from("account_requests")
           .select("id,status")
@@ -373,82 +219,26 @@ export default function RequestManagement() {
         }
       }
 
-      // Preferred path: call Edge Function (create_user action=decide)
       const finalRole: FinalRole =
         (item.extra?.role?.toLowerCase() as FinalRole) || "athlete";
 
-      try {
-        const res = await fetch(getFunctionUrl("create_user"), {
-          method: "POST",
-          headers: await getFunctionHeaders(),
-          body: JSON.stringify({
-            action: "decide",
-            decision: status === "Accepted" ? "approve" : "deny",
-            request_id: requestId,
-            final_role: finalRole,
-            reason: cleanReason,
-          }),
-        });
-        const out = await res.json();
-        if (!res.ok || out?.error) {
-          throw new Error(out?.error || "Edge function failed");
-        }
-      } catch (edgeErr) {
-        // Use edgeErr so eslint doesn't complain, and log for debugging
-        console.warn("Edge function decide failed; falling back to direct updates:", edgeErr);
-
-        // Fallback: direct table updates (kept to avoid breaking flows if function is unavailable)
-        if (status === "Accepted") {
-          const { error: e1 } = await supabase
-            .from("account_requests")
-            .update({
-              status: "approved",
-              reason: cleanReason,
-              decided_by: auth?.user?.id ?? null,
-              decided_at: decidedAt,
-            })
-            .eq("id", requestId)
-            .eq("status", "pending");
-          if (e1) {
-            const { error: eMin } = await supabase
-              .from("account_requests")
-              .update({ status: "approved", reason: cleanReason })
-              .eq("id", requestId)
-              .eq("status", "pending");
-            if (eMin) throw eMin;
-          }
-          if (item.extra?.userId) {
-            const { error: e2 } = await supabase
-              .from("profiles")
-              .update({ role: finalRole, status: "accepted", is_active: true, updated_at: decidedAt })
-              .eq("id", item.extra.userId);
-            if (e2) throw e2;
-          }
-        } else {
-          const { error: e3 } = await supabase
-            .from("account_requests")
-            .update({
-              status: "denied",
-              reason: cleanReason,
-              decided_by: auth?.user?.id ?? null,
-              decided_at: decidedAt,
-            })
-            .eq("id", requestId)
-            .eq("status", "pending");
-          if (e3) {
-            const { error: eMin2 } = await supabase
-              .from("account_requests")
-              .update({ status: "denied", reason: cleanReason })
-              .eq("id", requestId)
-              .eq("status", "pending");
-            if (eMin2) throw eMin2;
-          }
-        }
-      }
+      // Use offline-enabled decision service
+      const { queued } = await decideRequestOffline({
+        requestId,
+        userId: item.extra?.userId,
+        decision: status === "Accepted" ? "approve" : "deny",
+        finalRole,
+        reason: cleanReason,
+      });
 
       await refreshRequests();
       setFilter((curr) => (curr !== "All" && curr !== status ? "All" : curr));
-      message.success(status === "Accepted" ? "Request accepted." : "Request denied.");
+
+      if (queued) {
+        message.info(`You're offline. Request will be ${status === "Accepted" ? "accepted" : "denied"} when you're back online.`);
+      } else {
+        message.success(status === "Accepted" ? "Request accepted." : "Request denied.");
+      }
     } catch (e) {
       if (e instanceof Error) {
         message.error(e.message);
@@ -515,7 +305,10 @@ export default function RequestManagement() {
                 style={selectedId === item.id ? { boxShadow: `0 0 0 2px ${BRAND.maroon} inset` } : {}}
               >
                 <div className="flex items-center gap-3 text-left min-w-0">
-                  <Avatar icon={<UserOutlined />} />
+                  <Avatar 
+                    src={item.extra?.userId ? avatarById[item.extra.userId] : undefined}
+                    icon={!avatarById[item.extra?.userId ?? ""] ? <UserOutlined /> : undefined}
+                  />
                   <div className="leading-tight truncate">
                     <div className="font-semibold text-gray-900 truncate">{item.name}</div>
                     <div className="text-xs text-gray-500 truncate">
@@ -556,7 +349,11 @@ export default function RequestManagement() {
               <div className="space-y-6">
                 <div className="rounded-2xl border p-5">
                   <div className="flex flex-wrap items-center gap-4">
-                    <Avatar size={72} icon={<UserOutlined />} />
+                    <Avatar 
+                      size={72} 
+                      src={selected.extra?.userId ? avatarById[selected.extra.userId] : undefined}
+                      icon={!avatarById[selected.extra?.userId ?? ""] ? <UserOutlined /> : undefined}
+                    />
                     <div className="min-w-[220px]">
                       <div className="text-lg font-semibold leading-tight">{selected.name}</div>
                       <div className="text-sm text-gray-500 space-x-2">

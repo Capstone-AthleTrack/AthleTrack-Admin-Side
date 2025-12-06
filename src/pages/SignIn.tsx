@@ -12,6 +12,8 @@ import {
   submitAdminRequest,
   getMyProfile,
 } from "@/services/admin-approval";
+import { recordLogin } from "@/utils/telemetry";
+import { prefetchAllDataBackgroundWithProgressive } from "@/services/offline";
 
 interface SignInFormValues {
   email: string;
@@ -180,6 +182,10 @@ export default function SignIn() {
       }
 
       // 5) Admin & accepted → proceed
+      // Record login for telemetry
+      recordLogin("password");
+      // Prefetch all data for offline use (runs in background with progressive)
+      prefetchAllDataBackgroundWithProgressive();
       navigate("/dashboard");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

@@ -16,7 +16,6 @@ import { ArrowLeftOutlined } from "@ant-design/icons";
 import NavBar from "@/components/NavBar";
 import { BRAND } from "@/brand";
 import {
-  loadAthleteBundle,
   type ProfileLite,
   type ChartAthletePrePost,
   type ChartAthletePerf,
@@ -24,6 +23,9 @@ import {
   shapeAthletePerf,
   downloadCsv, // same helper used by SportsDetail.tsx
 } from "@/services/sports";
+
+/* ── Offline-enabled service wrapper ─────────────────────────────────────── */
+import { loadAthleteBundleOffline, trackRecentAthlete } from "@/services/offline";
 import supabase from "@/core/supabase";
 /* ── Avatars (signed URLs; no UI changes) ─────────────────────────────────── */
 import { bulkSignedByUserIds } from "@/services/avatars";
@@ -198,6 +200,10 @@ export default function AthleteDetail() {
 
   // Avatar (signed URL)
   const [avatarSrc, setAvatarSrc] = useState<string | undefined>(undefined);
+  
+  // Offline status (tracks cache usage for potential UI indicators)
+  const [_fromCache, setFromCache] = useState(false);
+  void _fromCache; // Reserved for future offline indicator
 
   // Refs for chart export (same pattern as SportsDetail)
   const prepostChartRef = useRef<HTMLDivElement>(null);
@@ -242,7 +248,14 @@ export default function AthleteDetail() {
         const athleteKey: string | null = row.user_id ?? row.id ?? null;
         if (!athleteKey) return;
 
-        const bundle = await loadAthleteBundle(athleteKey);
+        // Use offline-enabled fetch
+        const result = await loadAthleteBundleOffline(athleteKey);
+        const bundle = result.data;
+        setFromCache(result.fromCache);
+        
+        // Track for progressive prefetching
+        trackRecentAthlete(athleteKey);
+        
         if (!alive) return;
 
         // 🔧 Merge to preserve `pup_id`/email coming from the view/base table.

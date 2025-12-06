@@ -1,14 +1,22 @@
 import { useEffect, useState } from "react";
-import { Avatar, Dropdown, Menu, Modal } from "antd";
+import { Avatar, Dropdown, Modal } from "antd";
 import { LogoutOutlined, SettingOutlined, UserOutlined } from "@ant-design/icons";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { BRAND } from "@/brand";
+import { supabase } from "@/core/supabase";
+import { bulkSignedByUserIds } from "@/services/avatars";
+import { clearCachedAuth } from "@/components/ProtectedRoute";
+import { SyncBadge, useReconnectionToast } from "@/components/OfflineIndicator";
 
 export default function NavBar() {
   const [scrolled, setScrolled] = useState(false);
   const [isModalVisible, setIsModalVisible] = useState(false); 
+  const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
   const { pathname } = useLocation();
   const navigate = useNavigate(); 
+
+  // Show toast when reconnecting
+  useReconnectionToast();
 
   // scroll to add shadow and background
   useEffect(() => {
@@ -19,14 +27,41 @@ export default function NavBar() {
     window.addEventListener("scroll", handleScroll, { passive: true });
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
+
+  // Fetch logged-in user's avatar
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getUser();
+        const uid = data?.user?.id;
+        if (!uid || !alive) return;
+
+        const urls = await bulkSignedByUserIds([uid], 60 * 60 * 24);
+        if (!alive) return;
+        if (urls[uid]) setAvatarUrl(urls[uid]);
+      } catch {
+        // ignore; keep placeholder
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
   
   // logoutconfirmation modal
   const showModal = () => {
     setIsModalVisible(true);
   };
 
-  const handleOk = () => {
+  const handleOk = async () => {
     setIsModalVisible(false);
+    try {
+      // Clear offline auth cache
+      clearCachedAuth();
+      // Sign out from Supabase
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.warn('[NavBar] signOut error:', err);
+    }
     navigate("/sign-in"); 
   };
 
@@ -34,42 +69,39 @@ export default function NavBar() {
     setIsModalVisible(false); 
   };
 
-  // dropdown menu
-  const menu = (
-    <Menu
-      className="bg-white shadow-lg rounded-lg border border-gray-300"
-      style={{
-        width: 220,
-        padding: 0,
-        boxShadow: "0 6px 18px rgba(0,0,0,0.2)",
-      }}
-    >
-      <Menu.Item
-        key="settings"
-        className="px-6 py-4 text-xl font-medium text-black transition-all duration-300"
-        style={{ borderBottom: `1px solid ${BRAND.maroon}` }}
-      >
-        <Link to="/settings" className="flex items-center gap-3 w-full hover:text-white hover:bg-maroon-500 rounded-md px-2 py-2">
-          <SettingOutlined className="text-xl" />
-          <span>Settings</span>
-        </Link>
-      </Menu.Item>
-
-      <Menu.Item
-        key="logout"
-        className="px-6 py-4 text-xl font-medium text-red-600 transition-all duration-300"
-        onClick={showModal}
-      >
-        <button
-          className="flex items-center gap-3 w-full rounded-md px-2 py-2 text-left"
-          type="button"
-        >
-          <LogoutOutlined className="text-xl" />
-          <span>Log Out</span>
-        </button>
-      </Menu.Item>
-    </Menu>
-  );
+  // dropdown menu items (new API)
+  const menuItems = {
+    items: [
+      {
+        key: "settings",
+        label: (
+          <Link to="/settings" className="flex items-center gap-3 w-full hover:text-white hover:bg-maroon-500 rounded-md px-2 py-2">
+            <SettingOutlined className="text-xl" />
+            <span>Settings</span>
+          </Link>
+        ),
+        className: "px-6 py-4 text-xl font-medium text-black transition-all duration-300",
+        style: { borderBottom: `1px solid ${BRAND.maroon}` },
+      },
+      {
+        key: "logout",
+        label: (
+          <span className="flex items-center gap-3 w-full rounded-md px-2 py-2 text-left text-red-600">
+            <LogoutOutlined className="text-xl" />
+            <span>Log Out</span>
+          </span>
+        ),
+        className: "px-6 py-4 text-xl font-medium transition-all duration-300",
+        onClick: showModal,
+      },
+    ],
+    className: "bg-white shadow-lg rounded-lg border border-gray-300",
+    style: {
+      width: 220,
+      padding: 0,
+      boxShadow: "0 6px 18px rgba(0,0,0,0.2)",
+    },
+  };
 
   return (
     <header
@@ -131,9 +163,17 @@ export default function NavBar() {
         </nav>
 
         <div className="flex items-center gap-3">
-          {/* Search bar removed from navbar as requested */}
-          <Dropdown overlay={menu} trigger={["click"]}>
-            <Avatar size="large" icon={<UserOutlined />} />
+          {/* Sync status indicator */}
+          <SyncBadge className="hidden sm:flex" />
+          
+          {/* User avatar dropdown */}
+          <Dropdown menu={menuItems} trigger={["click"]}>
+            <Avatar 
+              size="large" 
+              src={avatarUrl} 
+              icon={!avatarUrl ? <UserOutlined /> : undefined}
+              className="cursor-pointer"
+            />
           </Dropdown>
         </div>
       </div>
@@ -141,7 +181,7 @@ export default function NavBar() {
       {/* modal for logout confirmation */}
       <Modal
         title="Confirm Log Out"
-        visible={isModalVisible}
+        open={isModalVisible}
         onOk={handleOk}
         onCancel={handleCancel}
         okText="Yes"

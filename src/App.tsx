@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { recordSessionStart } from "@/utils/telemetry";
 import { Routes, Route, Navigate } from "react-router-dom";
+import { message } from "antd";
 
 /* ── Public pages ── */
 import SignIn from "./pages/SignIn";
@@ -18,6 +19,10 @@ import Settings from "./pages/Settings";
 
 /* ── Single source of truth for gating ── */
 import ProtectedRoute from "@/components/ProtectedRoute";
+
+/* ── Offline components ── */
+import { OfflineBanner, offlineIndicatorStyles } from "@/components/OfflineIndicator";
+import { onSyncNotification, type SyncNotification } from "@/core/offline";
 
 /**
  * IMPORTANT:
@@ -40,8 +45,49 @@ export default function App() {
     recordSessionStart();
   }, []);
 
+  // Listen for sync notifications and show as Ant Design messages
+  useEffect(() => {
+    const unsubscribe = onSyncNotification((notification: SyncNotification) => {
+      switch (notification.type) {
+        case 'success':
+          message.success({
+            content: notification.message,
+            duration: 3,
+          });
+          break;
+        case 'error':
+          message.error({
+            content: `${notification.message}${notification.description ? `: ${notification.description}` : ''}`,
+            duration: 5,
+          });
+          break;
+        case 'warning':
+          message.warning({
+            content: notification.message,
+            duration: 4,
+          });
+          break;
+        case 'info':
+        default:
+          message.info({
+            content: notification.message,
+            duration: 3,
+          });
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
   return (
-    <Routes>
+    <>
+      {/* Global offline banner */}
+      <OfflineBanner />
+      
+      {/* Inject CSS for offline indicator animations */}
+      <style>{offlineIndicatorStyles}</style>
+
+      <Routes>
       {/* Default → sign-in */}
       <Route path="/" element={<Navigate to="/sign-in" replace />} />
 
@@ -111,5 +157,6 @@ export default function App() {
       {/* Fallback → sign-in */}
       <Route path="*" element={<Navigate to="/sign-in" replace />} />
     </Routes>
+    </>
   );
 }
