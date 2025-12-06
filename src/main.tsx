@@ -2,10 +2,12 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { ConfigProvider, theme, App as AntdApp } from "antd";
+import { registerSW } from "virtual:pwa-register";
 import App from "./App";
 import "./styles/tailwind.css";
 import "antd/dist/reset.css";
 import { BRAND } from "./brand";
+import { initOffline } from "./core/offline";
 
 /**
  * NOTE:
@@ -14,6 +16,37 @@ import { BRAND } from "./brand";
  * Gmail-only gating now lives in <ProtectedRoute />, which decides access
  * without force-closing the session from this global entrypoint.
  */
+
+// ---- Initialize Offline System ----
+// Sets up IndexedDB, network listeners, and background sync
+initOffline();
+
+// ---- Register Service Worker ----
+// Auto-updates when new version is available
+const updateSW = registerSW({
+  onNeedRefresh() {
+    // New content available - auto update
+    // You could show a toast here if you want user confirmation
+    console.log("[PWA] New content available, updating...");
+    updateSW(true);
+  },
+  onOfflineReady() {
+    console.log("[PWA] App ready to work offline");
+  },
+  onRegistered(registration) {
+    console.log("[PWA] Service worker registered", registration);
+    
+    // Check for updates periodically (every hour)
+    if (registration) {
+      setInterval(() => {
+        registration.update();
+      }, 60 * 60 * 1000);
+    }
+  },
+  onRegisterError(error) {
+    console.error("[PWA] Service worker registration failed:", error);
+  },
+});
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

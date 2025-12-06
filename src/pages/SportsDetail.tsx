@@ -18,7 +18,6 @@ import { BRAND } from "@/brand";
 
 /* ── Live data helpers (Supabase views) ───────────────────────────────────── */
 import {
-  loadSportBundle,
   type VCoach,
   type VAthleteLite,
   type ChartPrePostBar,
@@ -27,6 +26,9 @@ import {
   shapePerfLines,
   downloadCsv,
 } from "@/services/sports";
+
+/* ── Offline-enabled service wrapper ─────────────────────────────────────── */
+import { loadSportBundleOffline, trackRecentSport } from "@/services/offline";
 
 /* ── Team-gender aware services (DB RPCs; NO UI changes) ─────────────────── */
 import {
@@ -410,6 +412,10 @@ export default function SportDetail() {
 
   /* ── Signed avatar URLs (coaches/athletes) ─────────────────────────────── */
   const [avatarById, setAvatarById] = useState<Record<string, string>>({});
+  
+  /* ── Offline status (tracks cache usage for potential UI indicators) ────── */
+  const [_fromCache, setFromCache] = useState(false);
+  void _fromCache; // Reserved for future offline indicator
   async function refreshAvatars(ids: string[]) {
     if (!ids?.length) return;
     try {
@@ -470,7 +476,14 @@ export default function SportDetail() {
     (async () => {
       try {
         setLoading(true);
-        const bundle = await loadSportBundle(slug);
+        
+        // Use offline-enabled fetch
+        const result = await loadSportBundleOffline(slug);
+        const bundle = result.data;
+        setFromCache(result.fromCache);
+        
+        // Track for progressive prefetching
+        trackRecentSport(slug);
 
         // Default: use bundle athletes/coaches (legacy)
         let nextCoaches: VCoach[] = bundle.coaches;

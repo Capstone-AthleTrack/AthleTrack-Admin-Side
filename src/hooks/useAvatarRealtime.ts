@@ -35,6 +35,7 @@ export function subscribeProfilesAvatar(
   if (!userIds?.length) return () => {};
 
   const inList = userIds.join(",");
+  let isUnsubscribed = false;
 
   // Create the channel once with official client type…
   const channel = supabase.channel(`profiles-avatars:${inList}`);
@@ -50,6 +51,8 @@ export function subscribeProfilesAvatar(
       filter: `id=in.(${inList})`,
     },
     (payload) => {
+      if (isUnsubscribed) return;
+      
       const oldRow = payload.old;
       const newRow = payload.new;
       if (!newRow) return;
@@ -70,6 +73,12 @@ export function subscribeProfilesAvatar(
   ).subscribe();
 
   return () => {
-    supabase.removeChannel(channel);
+    isUnsubscribed = true;
+    // Use setTimeout to allow the connection to settle before removing
+    setTimeout(() => {
+      supabase.removeChannel(channel).catch(() => {
+        // Silently ignore removal errors (channel may already be closed)
+      });
+    }, 0);
   };
 }

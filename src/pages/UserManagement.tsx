@@ -24,6 +24,15 @@ import NavBar from "@/components/NavBar";
 /* ---------- Supabase client (reads/writes public.profiles) ---------- */
 import { supabase } from "@/core/supabase";
 
+/* ---------- Offline-enabled services ---------- */
+import {
+  fetchUsersOffline,
+  addUserOffline,
+  updateUserOffline,
+  deleteUserOffline,
+} from "@/services/offline";
+import { useNetworkStatus } from "@/hooks/useNetworkStatus";
+
 /* ---------- Avatars (signed URLs; no UI changes) ---------- */
 import { bulkSignedByUserIds } from "@/services/avatars";
 import { subscribeProfilesAvatar } from "@/hooks/useAvatarRealtime";
@@ -69,20 +78,7 @@ interface ProfileRow {
   created_at: string | null;
 }
 
-type ProfileInsert = Partial<ProfileRow>;
-
-/* RPC + View return row typing (loose because view columns can drift) */
-type AdminListUsersRow = Record<string, unknown> & {
-  id?: string;
-  email?: string | null;
-  role?: string | null;
-  status?: string | null;
-  full_name?: string | null;
-  phone?: string | null;
-  sport?: string | null;
-  team?: string | null;
-  created_at?: string | null;
-};
+// ProfileInsert and AdminListUsersRow types moved to users.offline.ts
 
 /* ---------- role label helpers (UI <-> DB) ---------- */
 const roleDbToUi = (r: DBRole): string | undefined =>
@@ -99,28 +95,9 @@ const statusToReq: Record<Exclude<DBStatus, null>, ReqStatus> = {
   disabled: "Denied",
 };
 
-/* Normalize DB status coming from mixed schemas (e.g., 'active' → 'accepted', 'suspended'/'denied' → 'decline') */
-function normalizeStatus(s?: string | null): DBStatus {
-  const v = String(s ?? "").toLowerCase();
-  if (v === "accepted" || v === "active") return "accepted";
-  if (v === "decline" || v === "denied" || v === "suspended") return "decline";
-  if (v === "disabled") return "disabled";
-  if (v === "pending" || v === "") return "pending";
-  return "pending";
-}
+// normalizeStatus moved to users.offline.ts
 
-/* ---------- small safe-pickers (handle view column drift) ---------- */
-function pickStr(obj: Record<string, unknown>, ...keys: string[]): string | null {
-  for (const k of keys) {
-    const v = obj[k];
-    if (typeof v === "string" && v.length) return v;
-  }
-  return null;
-}
-function pickLower(obj: Record<string, unknown>, ...keys: string[]): string | null {
-  const s = pickStr(obj, ...keys);
-  return s ? s.toLowerCase() : null;
-}
+/* ---------- small safe-pickers moved to users.offline.ts ---------- */
 
 /* ---------- team utils ---------- */
 function toUiTeam(val?: string | null): string | undefined {
@@ -162,24 +139,7 @@ function Labeled({ label, value }: { label: string; value?: string }) {
 }
 
 /* ---------- CANONICALIZATION HELPERS (no UI changes) ---------- */
-/* We convert form inputs to the canonical values the DB CHECK/enum expects. */
-function normSport(input?: string | null): string | null {
-  if (!input) return null;
-  let s = input.normalize("NFKC").toLowerCase().trim();
-  s = s.replace(/\s+/g, " ");
-  const map: Record<string, string> = {
-    basketball: "basketball",
-    volleyball: "volleyball",
-    "beach volleyball": "beach volleyball",
-    futsal: "futsal",
-    "sepak-takraw": "sepak-takraw",
-    "sepak takraw": "sepak-takraw",
-    softball: "softball",
-    baseball: "baseball",
-    football: "football",
-  };
-  return map[s] ?? s;
-}
+/* normSport moved to users.offline.ts */
 
 function normTeam(input?: string | null): string | null {
   if (!input) return null;
@@ -220,13 +180,20 @@ export default function UserManagement() {
   // Add User modal state
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [form] = Form.useForm();
+  const addSportValue = Form.useWatch('sport', form);
 
   // Edit User modal (opens when you double-click the details panel on the right)
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [editForm] = Form.useForm();
+  const editSportValue = Form.useWatch('sport', editForm);
 
   /* delete-confirm modal */
   const [showConfirm, setShowConfirm] = useState(false);
+
+  /* offline status */
+  const { isOnline } = useNetworkStatus();
+  const [_fromCache, setFromCache] = useState(false);
+  void _fromCache; // Reserved for future offline indicator
 
   /* ---------- signed avatar URLs (read-only) ---------- */
   const [avatarSrcById, setAvatarSrcById] = useState<Record<string, string>>({});
@@ -243,68 +210,39 @@ export default function UserManagement() {
     }
   }
 
-  /* ---------- load from Supabase (resilient view -> table) ---------- */
+  /* ---------- load from Supabase (with offline caching) ---------- */
   async function loadProfiles() {
-    // 1) SECURITY DEFINER VIEW (resilient to column drift)
     try {
-      // Use select('*') to avoid 400 if a specific column is missing (e.g. pup_id)
-      const { data: viewRows, error: viewErr } = await supabase
-        .from("v_users_admin")
-        .select("*")
-        .order("created_at", { ascending: false });
+      // Use offline-enabled fetch with caching
+      const result = await fetchUsersOffline();
+      setFromCache(result.fromCache);
 
-      if (!viewErr && Array.isArray(viewRows)) {
-        const items = (viewRows as AdminListUsersRow[]).map((row) => {
-          const r = row as Record<string, unknown>;
-          const mapped: ProfileRow = {
-            id: String(r.id ?? ""),
-            email: pickStr(r, "email"),
-            role: (pickLower(r, "role") as DBRole) ?? null,
-            status: normalizeStatus(pickStr(r, "status")),
-            full_name: pickStr(r, "full_name", "name"),
-            phone: pickStr(r, "phone", "phone_number"),
-            // handle different view aliases for PUP ID
-            pup_id: pickStr(r, "pup_id", "pup", "pupid", "pup_id_number"),
-            sport: pickStr(r, "sport"),
-            team: pickStr(r, "team", "team_name"),
-            created_at: pickStr(r, "created_at", "created", "inserted_at"),
-          };
-          return toItem(mapped);
-        });
+      const items = result.data.map((p) => toItem({
+        id: p.id,
+        email: p.email,
+        role: p.role,
+        status: p.status,
+        full_name: p.full_name,
+        phone: p.phone,
+        pup_id: p.pup_id,
+        sport: p.sport,
+        team: p.team,
+        created_at: p.created_at,
+      }));
 
-        setData(items);
-        await refreshAvatars(items.map((i) => i.id));
-        if (selectedId && !items.some((d) => d.id === selectedId)) {
-          setSelectedId(null);
-        }
-        return;
+      setData(items);
+      await refreshAvatars(items.map((i) => i.id));
+      
+      if (selectedId && !items.some((d) => d.id === selectedId)) {
+        setSelectedId(null);
       }
-    } catch {
-      // fallthrough to table
-    }
 
-    // 2) Fallback: direct table read (RLS may restrict to current user)
-    const { data: rows, error } = await supabase
-      .from("profiles")
-      .select(
-        "id,email,role,status,full_name,phone,pup_id,sport,team,created_at"
-      )
-      .order("created_at", { ascending: false });
-
-    if (error) {
+      if (result.fromCache && result.isStale && !isOnline) {
+        message.info("Showing cached data (offline)");
+      }
+    } catch (error) {
       console.error(error);
       message.error("Failed to load profiles.");
-      return;
-    }
-
-    const items = (rows as ProfileRow[]).map((p) =>
-      toItem({ ...p, status: normalizeStatus(p.status) })
-    );
-    setData(items);
-    await refreshAvatars(items.map((i) => i.id));
-
-    if (selectedId && !items.some((d) => d.id === selectedId)) {
-      setSelectedId(null);
     }
   }
 
@@ -367,32 +305,23 @@ export default function UserManagement() {
     try {
       const values = await form.validateFields();
 
-      // Canonicalize inputs for DB CHECK
-      const canonicalSport = normSport(values.sport);
-      // Prefer exact value if it is already "men"|"women"; otherwise normalize
-      const canonicalTeam =
-        values.team === "men" || values.team === "women"
-          ? values.team
-          : normTeam(values.team);
-
-      const payload: ProfileInsert = {
+      // Use offline-enabled add
+      const { queued } = await addUserOffline({
         email: values.email,
         role: roleUiToDb(values.role),
-        status: "accepted",
         full_name: values.name ?? null,
         phone: values.phone ?? null,
         pup_id: values.pupId ?? null,
-        sport: canonicalSport,
-        team: canonicalTeam,
-      };
+        sport: values.sport,
+        team: values.team,
+      });
 
-      const { error } = await supabase
-        .from("profiles")
-        .insert(payload);
-
-      if (error) throw error;
-
-      message.success("User added.");
+      if (queued) {
+        message.info("You're offline. User will be added when you're back online.");
+      } else {
+        message.success("User added.");
+      }
+      
       closeAdd();
       await loadProfiles();
     } catch (e) {
@@ -431,31 +360,19 @@ export default function UserManagement() {
       const roleDb = roleUiToDb(values.role);
       const supportedRoles = new Set(["admin", "coach", "athlete", "user"]);
 
-      // Canonicalize inputs so the CHECK/enum passes
-      const canonicalSport = normSport(values.sport);
-
-      // Prefer exact token if it's already "men"|"women"; else normalize any label ("men's", etc.)
-      const canonicalTeam =
-        values.team === "men" || values.team === "women"
-          ? values.team
-          : normTeam(values.team);
-
-      // Call Edge Function (single source of truth)
-      const { data: fnData, error: fnErr } = await supabase.functions.invoke("update_profile", {
-        body: {
-          user_id: selected.id,
-          sport: canonicalSport,
-          team: canonicalTeam,
-          ...(roleDb && supportedRoles.has(roleDb) ? { role: roleDb } : {}),
-        },
+      // Use offline-enabled update
+      const { queued } = await updateUserOffline(selected.id, {
+        sport: values.sport,
+        team: values.team,
+        role: roleDb && supportedRoles.has(roleDb) ? roleDb : undefined,
       });
 
-      if (fnErr) throw fnErr as unknown as Error;
-      if (fnData && (fnData as { error?: string }).error) {
-        throw new Error((fnData as { error?: string }).error as string);
+      if (queued) {
+        message.info("You're offline. Changes will sync when you're back online.");
+      } else {
+        message.success("Profile updated.");
       }
 
-      message.success("Profile updated.");
       closeEdit();
       await loadProfiles();
       setSelectedId(selected.id); // keep focus
@@ -469,12 +386,18 @@ export default function UserManagement() {
   const handleDelete = async () => {
     if (!selected) return;
     try {
-      const { error } = await supabase.from("profiles").delete().eq("id", selected.id);
-      if (error) throw error;
+      // Use offline-enabled delete
+      const { queued } = await deleteUserOffline(selected.id);
 
       setSelectedId(null);
       setShowConfirm(false);
-      message.success("User deleted.");
+      
+      if (queued) {
+        message.info("You're offline. User will be deleted when you're back online.");
+      } else {
+        message.success("User deleted.");
+      }
+      
       await loadProfiles();
     } catch {
       message.error("Failed to delete profile.");
@@ -645,7 +568,7 @@ export default function UserManagement() {
         cancelText="Cancel"
         centered
         width={560}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={form} layout="vertical">
           <Form.Item
@@ -705,8 +628,8 @@ export default function UserManagement() {
               <Select
                 placeholder="Select team"
                 /* keep UI label the same but send enum-safe values */
-                options={allowedTeamsForSport(form.getFieldValue('sport')).map((t) => ({
-                  label: t === "men's" ? "Men’s" : "Women’s",
+                options={allowedTeamsForSport(addSportValue).map((t) => ({
+                  label: t === "men's" ? "Men's" : "Women's",
                   value: t === "men's" ? "men" : "women",
                 }))}
               />
@@ -725,7 +648,7 @@ export default function UserManagement() {
         cancelText="Cancel"
         centered
         width={560}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={editForm} layout="vertical">
           <Form.Item
@@ -787,8 +710,8 @@ export default function UserManagement() {
               <Select
                 placeholder="Select team"
                 /* keep UI label the same but send enum-safe values */
-                options={allowedTeamsForSport(editForm.getFieldValue('sport')).map((t) => ({
-                  label: t === "men's" ? "Men’s" : "Women’s",
+                options={allowedTeamsForSport(editSportValue).map((t) => ({
+                  label: t === "men's" ? "Men's" : "Women's",
                   value: t === "men's" ? "men" : "women",
                 }))}
               />

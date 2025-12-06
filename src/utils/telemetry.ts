@@ -1,27 +1,54 @@
 // src/utils/telemetry.ts
 import supabase from "@/core/supabase";
+import { getNetworkStatus, queueAdd } from "@/core/offline";
 
-export async function recordLogin(provider?: string) {
+/**
+ * Record a login event using the RPC function
+ * This logs to login_events/telemetry_logins tables
+ */
+export async function recordLogin(_provider?: string) {
   const u = (await supabase.auth.getUser()).data.user;
   if (!u) return;
-  await supabase.from("auth_events").insert({
-    user_id: u.id,
-    event: "login",
-    device: "web",
-    platform: "react",
-    provider: provider ?? "password",
-  });
+  
+  if (getNetworkStatus()) {
+    try {
+      // Use the RPC function that inserts into the correct table
+      await supabase.rpc("rpc_log_login");
+    } catch (err) {
+      console.warn("[telemetry] Failed to log login:", err);
+      // Queue for later if RPC fails
+      await queueAdd("telemetry:login", { userId: u.id });
+    }
+  } else {
+    // Queue for background sync when offline
+    await queueAdd("telemetry:login", { userId: u.id });
+  }
 }
 
-let sent = false;
-export async function recordSessionStart(page: string = window.location.pathname) {
-  if (sent) return;
-  sent = true;
+let sessionSent = false;
+/**
+ * Record a session start using the RPC function
+ * This logs to telemetry_sessions table
+ */
+export async function recordSessionStart(_page: string = window.location.pathname) {
+  if (sessionSent) return;
+  sessionSent = true;
+  
   const u = (await supabase.auth.getUser()).data.user;
-  await supabase.from("app_sessions").insert({
-    user_id: u?.id ?? null,
-    device: "web",
-    platform: "react",
-    page,
-  });
+  if (!u) return; // Only log for authenticated users
+  
+  if (getNetworkStatus()) {
+    try {
+      // Use the RPC function that inserts into the correct table
+      // Platform parameter: 'web', 'ios', 'android', etc.
+      await supabase.rpc("rpc_log_session", { _platform: "web" });
+    } catch (err) {
+      console.warn("[telemetry] Failed to log session:", err);
+      // Queue for later if RPC fails
+      await queueAdd("telemetry:session", { userId: u.id, platform: "web" });
+    }
+  } else {
+    // Queue for background sync when offline
+    await queueAdd("telemetry:session", { userId: u.id, platform: "web" });
+  }
 }

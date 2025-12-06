@@ -24,8 +24,11 @@ import NavBar from "@/components/NavBar";
 import { BRAND } from "@/brand";
 
 /* ── services (wired, no UI change) ── */
-import { getMyProfile, updateMyProfile } from "@/services/profile";
 import { changePassword } from "@/services/authSecurity";
+
+/* ── Offline-enabled profile services ── */
+import { getMyProfileOffline, updateMyProfileOffline } from "@/services/offline";
+import { useNetworkStatus } from "@/hooks/useNetworkStatus";
 
 /* ── storage/signing (no UI change) ── */
 /* IMPORTANT: use the same default import style app-wide to avoid duplicate clients */
@@ -58,6 +61,10 @@ const mockProfile: ProfileValues = {
 
 export default function Settings() {
   const navigate = useNavigate();
+  
+  /* network status for offline support (pendingSync available for future sync indicator) */
+  const { isOnline } = useNetworkStatus();
+  void isOnline; // Reserved for future offline indicator
 
   /* state */
   const [avatarUrl, setAvatarUrl] = useState<string>();           // live preview (data URL or signed URL)
@@ -67,6 +74,7 @@ export default function Settings() {
   const [loading, setLoading] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [profileForm] = Form.useForm<ProfileValues>();
+  const [securityForm] = Form.useForm();
 
   /* AntD helpers */
   const [msgApi, msgCtx] = message.useMessage();
@@ -111,10 +119,11 @@ export default function Settings() {
 
   /* preload data */
   useEffect(() => {
-    // Load real profile from Supabase
+    // Load real profile from Supabase (with offline caching)
     (async () => {
       try {
-        const p = await getMyProfile(); // { full_name, email, pup_id, phone }
+        const result = await getMyProfileOffline();
+        const p = result.data;
         const mapped: ProfileValues = {
           fullName: p.full_name ?? "",
           email: (p.email ?? "") as string,
@@ -122,6 +131,9 @@ export default function Settings() {
           pupId: p.pup_id ?? "",
         };
         setSavedProfile(mapped);
+        if (result.fromCache && result.isStale) {
+          msgApi.info("Showing cached profile data (offline)");
+        }
       } catch (e) {
         // keep mock if fail
         msgApi.error((e as Error)?.message || "Failed to load profile.");
@@ -165,11 +177,16 @@ export default function Settings() {
     setLoading(true);
     try {
       // Persist text fields (email is read-only on backend; do not update it)
-      await updateMyProfile({
+      // Uses offline-aware service that queues updates when offline
+      const { queued } = await updateMyProfileOffline({
         full_name: values.fullName,
         phone: values.phone || null,
         pup_id: values.pupId || null,
       });
+      
+      if (queued) {
+        msgApi.info("You're offline. Changes will sync when you're back online.");
+      }
 
       // If an avatar is pending, upload to private Storage and set canonical path
       if (pendingAvatar) {
@@ -400,7 +417,7 @@ export default function Settings() {
   /* ───────── SECURITY TAB ───────── */
   const SecurityTab = (
     <Card className="shadow-md bg-white/90 backdrop-blur rounded-2xl p-8">
-      <Form layout="vertical" onFinish={confirmSaveSecurity}>
+      <Form form={securityForm} layout="vertical" onFinish={confirmSaveSecurity}>
         <Item label="Current Password" name="currentPassword" rules={[{ required: true }]}>
           <Input.Password size="large" prefix={<LockOutlined />} />
         </Item>

@@ -67,10 +67,12 @@ export default function ResetPassword() {
 
         <Card
           className="w-[min(92vw,480px)] shadow-2xl rounded-2xl border-0"
-          bodyStyle={{
-            padding: 28,
-            background: "linear-gradient(180deg,#ffffff,#fff7d6)",
-            borderRadius: 16,
+          styles={{
+            body: {
+              padding: 28,
+              background: "linear-gradient(180deg,#ffffff,#fff7d6)",
+              borderRadius: 16,
+            }
           }}
         >
           <div className="flex flex-col items-center text-center mb-3">
