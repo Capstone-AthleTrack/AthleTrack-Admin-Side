@@ -56,28 +56,155 @@ type ExtendedProfile = ProfileLite & {
   full_name?: string | null;
 };
 
-async function exportChartAsPdf(node: HTMLElement, filename: string) {
+// Helper to add formal header to worksheet
+function addFormalHeaderAthlete(ws: ExcelJS.Worksheet, reportTitle: string, reportPeriod: string, athleteName: string, sportName: string) {
+  const now = new Date();
+
+  // Row 1: Organization
+  ws.mergeCells("A1:J1");
+  ws.getCell("A1").value = "POLYTECHNIC UNIVERSITY OF THE PHILIPPINES";
+  ws.getCell("A1").font = { bold: true, size: 14 };
+  ws.getCell("A1").alignment = { horizontal: "center" };
+
+  // Row 2: Department
+  ws.mergeCells("A2:J2");
+  ws.getCell("A2").value = "Sports Development Program Office";
+  ws.getCell("A2").font = { size: 12 };
+  ws.getCell("A2").alignment = { horizontal: "center" };
+
+  // Row 3: System
+  ws.mergeCells("A3:J3");
+  ws.getCell("A3").value = "AthleTrack - Athletic Performance Management System";
+  ws.getCell("A3").font = { size: 11, italic: true };
+  ws.getCell("A3").alignment = { horizontal: "center" };
+
+  // Row 4: Empty
+  ws.getRow(4).height = 10;
+
+  // Row 5: Report Title
+  ws.mergeCells("A5:J5");
+  ws.getCell("A5").value = reportTitle;
+  ws.getCell("A5").font = { bold: true, size: 16, color: { argb: "FF8B0000" } };
+  ws.getCell("A5").alignment = { horizontal: "center" };
+
+  // Row 6: Athlete Name
+  ws.mergeCells("A6:J6");
+  ws.getCell("A6").value = `Athlete: ${athleteName}`;
+  ws.getCell("A6").font = { bold: true, size: 12 };
+  ws.getCell("A6").alignment = { horizontal: "center" };
+
+  // Row 7: Sport
+  ws.mergeCells("A7:J7");
+  ws.getCell("A7").value = `Sport: ${sportName} | ${reportPeriod}`;
+  ws.getCell("A7").font = { size: 11 };
+  ws.getCell("A7").alignment = { horizontal: "center" };
+
+  // Row 8: Empty
+  ws.getRow(8).height = 10;
+
+  // Row 9: Generated info
+  ws.getCell("A9").value = "Date Generated:";
+  ws.getCell("A9").font = { bold: true, size: 10 };
+  ws.getCell("B9").value = now.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  ws.getCell("B9").font = { size: 10 };
+
+  ws.getCell("E9").value = "Time:";
+  ws.getCell("E9").font = { bold: true, size: 10 };
+  ws.getCell("F9").value = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true });
+  ws.getCell("F9").font = { size: 10 };
+
+  // Row 10: Prepared by
+  ws.getCell("A10").value = "Prepared by:";
+  ws.getCell("A10").font = { bold: true, size: 10 };
+  ws.getCell("B10").value = "AthleTrack Admin System";
+  ws.getCell("B10").font = { size: 10 };
+
+  ws.getCell("E10").value = "Report Type:";
+  ws.getCell("E10").font = { bold: true, size: 10 };
+  ws.getCell("F10").value = "Individual Athlete Report";
+  ws.getCell("F10").font = { size: 10 };
+
+  // Row 11: Horizontal line (using border)
+  ws.getRow(11).height = 5;
+  for (let col = 1; col <= 10; col++) {
+    ws.getCell(11, col).border = { bottom: { style: "medium", color: { argb: "FF8B0000" } } };
+  }
+
+  return 12; // Return the next available row
+}
+
+// Formal PDF export with header for athlete
+async function exportChartAsPdf(node: HTMLElement, filename: string, athleteName: string, sportName: string, reportTitle: string) {
   const dataUrl = await toPng(node, { cacheBust: true, backgroundColor: "#FFFFFF" });
   const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
+  const now = new Date();
 
+  // Add formal header
+  doc.setFontSize(14);
+  doc.setFont("helvetica", "bold");
+  doc.text("POLYTECHNIC UNIVERSITY OF THE PHILIPPINES", pageWidth / 2, 30, { align: "center" });
+  
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "normal");
+  doc.text("Sports Development Program Office", pageWidth / 2, 45, { align: "center" });
+  
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "italic");
+  doc.text("AthleTrack - Athletic Performance Management System", pageWidth / 2, 58, { align: "center" });
+
+  // Horizontal line
+  doc.setDrawColor(139, 0, 0); // Maroon
+  doc.setLineWidth(1.5);
+  doc.line(40, 68, pageWidth - 40, 68);
+
+  // Report title
+  doc.setFontSize(16);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(139, 0, 0);
+  doc.text(reportTitle, pageWidth / 2, 88, { align: "center" });
+  
+  // Athlete and sport info
+  doc.setFontSize(12);
+  doc.setTextColor(0, 0, 0);
+  doc.text(`Athlete: ${athleteName} | Sport: ${sportName}`, pageWidth / 2, 105, { align: "center" });
+
+  // Date generated
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "normal");
+  doc.text(`Generated: ${now.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })} at ${now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true })}`, pageWidth / 2, 120, { align: "center" });
+
+  // Add chart image
   const img = new Image();
   img.src = dataUrl;
   await new Promise<void>((resolve) => (img.onload = () => resolve()));
 
-  const ratio = Math.min(pageWidth / img.width, pageHeight / img.height);
+  const availableHeight = pageHeight - 180;
+  const availableWidth = pageWidth - 80;
+  const ratio = Math.min(availableWidth / img.width, availableHeight / img.height);
   const w = img.width * ratio;
   const h = img.height * ratio;
   const x = (pageWidth - w) / 2;
-  const y = (pageHeight - h) / 2;
+  const y = 135;
 
   doc.addImage(dataUrl, "PNG", x, y, w, h);
+
+  // Footer
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "italic");
+  doc.setTextColor(100, 100, 100);
+  doc.text("This report was automatically generated by AthleTrack Admin System.", pageWidth / 2, pageHeight - 30, { align: "center" });
+  doc.text("For questions, contact the Sports Development Program Office.", pageWidth / 2, pageHeight - 20, { align: "center" });
+
   doc.save(filename.endsWith(".pdf") ? filename : `${filename}.pdf`);
 }
 
+// Formal Pre/Post Test XLSX export for athlete
 async function exportPrepostXlsxWithChartForAthlete(
   athleteSlug: string,
+  athleteName: string,
+  sportName: string,
   rows: Array<{
     "Athlete Name": string;
     "Email": string;
@@ -88,43 +215,131 @@ async function exportPrepostXlsxWithChartForAthlete(
   chartNode: HTMLElement
 ) {
   const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet("Pre vs Post");
+  wb.creator = "AthleTrack Admin System";
+  wb.created = new Date();
+  
+  const ws = wb.addWorksheet("Athlete Pre-Post Test Report");
+  const today = new Date().toISOString().split("T")[0];
+  const reportPeriod = `Generated: ${today}`;
+  
+  let currentRow = addFormalHeaderAthlete(ws, "INDIVIDUAL ATHLETE PRE-TEST VS POST-TEST REPORT", reportPeriod, athleteName, sportName);
+  currentRow++;
 
-  ws.columns = [
-    { header: "Athlete Name", key: "name", width: 28 },
-    { header: "Email", key: "email", width: 36 },
-    { header: "PUP ID", key: "pup", width: 18 },
-    { header: "Pre Test", key: "pre", width: 12 },
-    { header: "Post Test", key: "post", width: 12 },
+  // Calculate summary for single athlete
+  const row = rows[0];
+  const preVal = typeof row?.["Pre Test"] === "number" ? row["Pre Test"] : 0;
+  const postVal = typeof row?.["Post Test"] === "number" ? row["Post Test"] : 0;
+  const diff = postVal - preVal;
+  const percentChange = preVal > 0 ? ((diff / preVal) * 100).toFixed(1) : "N/A";
+  const status = diff > 0 ? "Improved" : diff < 0 ? "Declined" : "No Change";
+
+  // ===== ATHLETE INFO SECTION =====
+  ws.getCell(`A${currentRow}`).value = "I. ATHLETE INFORMATION";
+  ws.getCell(`A${currentRow}`).font = { bold: true, size: 12, color: { argb: "FF8B0000" } };
+  currentRow++;
+
+  const infoData = [
+    ["Field", "Value"],
+    ["Full Name", row?.["Athlete Name"] || athleteName],
+    ["Email", row?.["Email"] || "—"],
+    ["PUP ID", row?.["PUP ID"] || "—"],
+    ["Sport", sportName],
   ];
 
-  rows.forEach((r) =>
-    ws.addRow({
-      name: r["Athlete Name"],
-      email: r["Email"],
-      pup: r["PUP ID"],
-      pre: r["Pre Test"],
-      post: r["Post Test"],
-    })
-  );
+  infoData.forEach((r, idx) => {
+    const rowNum = currentRow + idx;
+    ws.getCell(`B${rowNum}`).value = r[0];
+    ws.getCell(`C${rowNum}`).value = r[1];
+    
+    if (idx === 0) {
+      ["B", "C"].forEach(col => {
+        ws.getCell(`${col}${rowNum}`).font = { bold: true, color: { argb: "FFFFFFFF" } };
+        ws.getCell(`${col}${rowNum}`).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF8B0000" } };
+      });
+    }
+  });
+  currentRow += infoData.length + 2;
+
+  // ===== TEST RESULTS SECTION =====
+  ws.getCell(`A${currentRow}`).value = "II. TEST RESULTS SUMMARY";
+  ws.getCell(`A${currentRow}`).font = { bold: true, size: 12, color: { argb: "FF8B0000" } };
+  currentRow++;
+
+  const resultsData = [
+    ["Metric", "Value", "Analysis"],
+    ["Pre-Test Score", preVal, "Initial assessment score"],
+    ["Post-Test Score", postVal, "Final assessment score"],
+    ["Score Difference", diff, `${typeof percentChange === "string" ? percentChange : percentChange}% change`],
+    ["Status", status, status === "Improved" ? "Athlete showed improvement" : status === "Declined" ? "Needs attention" : "Maintained level"],
+  ];
+
+  resultsData.forEach((r, idx) => {
+    const rowNum = currentRow + idx;
+    ws.getCell(`B${rowNum}`).value = r[0];
+    ws.getCell(`C${rowNum}`).value = r[1];
+    ws.getCell(`D${rowNum}`).value = r[2];
+    
+    if (idx === 0) {
+      ["B", "C", "D"].forEach(col => {
+        ws.getCell(`${col}${rowNum}`).font = { bold: true, color: { argb: "FFFFFFFF" } };
+        ws.getCell(`${col}${rowNum}`).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF8B0000" } };
+      });
+    }
+    
+    // Color code status row
+    if (r[0] === "Status") {
+      if (r[1] === "Improved") {
+        ws.getCell(`C${rowNum}`).font = { bold: true, color: { argb: "FF228B22" } };
+      } else if (r[1] === "Declined") {
+        ws.getCell(`C${rowNum}`).font = { bold: true, color: { argb: "FFDC143C" } };
+      }
+    }
+  });
+  currentRow += resultsData.length + 2;
+
+  // ===== CHART SECTION =====
+  ws.getCell(`A${currentRow}`).value = "III. VISUAL COMPARISON";
+  ws.getCell(`A${currentRow}`).font = { bold: true, size: 12, color: { argb: "FF8B0000" } };
+  currentRow++;
 
   const dataUrl = await toPng(chartNode, { cacheBust: true, backgroundColor: "#FFFFFF" });
   const base64 = dataUrl.split(",")[1];
   const imgId = wb.addImage({ base64, extension: "png" });
 
-  const startRow = rows.length + 3;
   ws.addImage(imgId, {
-    tl: { col: 0, row: startRow },
-    ext: { width: 900, height: 420 },
+    tl: { col: 0, row: currentRow },
+    ext: { width: 850, height: 400 },
     editAs: "oneCell",
   });
+  currentRow += 22;
+
+  // ===== FOOTER =====
+  ws.mergeCells(`A${currentRow}:H${currentRow}`);
+  ws.getCell(`A${currentRow}`).value = "— End of Report —";
+  ws.getCell(`A${currentRow}`).font = { italic: true, size: 10, color: { argb: "FF666666" } };
+  ws.getCell(`A${currentRow}`).alignment = { horizontal: "center" };
+  
+  currentRow++;
+  ws.mergeCells(`A${currentRow}:H${currentRow}`);
+  ws.getCell(`A${currentRow}`).value = "This report was automatically generated by AthleTrack Admin System. For questions, contact the Sports Development Program Office.";
+  ws.getCell(`A${currentRow}`).font = { size: 9, color: { argb: "FF999999" } };
+  ws.getCell(`A${currentRow}`).alignment = { horizontal: "center", wrapText: true };
+
+  // Set column widths
+  ws.getColumn(1).width = 5;
+  ws.getColumn(2).width = 20;
+  ws.getColumn(3).width = 28;
+  ws.getColumn(4).width = 32;
 
   const buf = await wb.xlsx.writeBuffer();
-  saveAs(new Blob([buf]), `${athleteSlug}-prepost-with-chart.xlsx`);
+  saveAs(new Blob([buf]), `AthleTrack_Athlete_PrePost_${athleteSlug}_${today}.xlsx`);
 }
 
+// Formal Performance Metrics XLSX export for athlete
 async function exportPerformanceXlsxWithChartForAthlete(
   athleteSlug: string,
+  athleteName: string,
+  sportName: string,
   rows: Array<{
     "Athlete Name": string;
     "Email": string;
@@ -140,49 +355,171 @@ async function exportPerformanceXlsxWithChartForAthlete(
   chartNode: HTMLElement
 ) {
   const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet("Performance");
+  wb.creator = "AthleTrack Admin System";
+  wb.created = new Date();
+  
+  const ws = wb.addWorksheet("Athlete Performance Report");
+  const today = new Date().toISOString().split("T")[0];
+  const reportPeriod = `Generated: ${today}`;
+  
+  let currentRow = addFormalHeaderAthlete(ws, "INDIVIDUAL ATHLETE PERFORMANCE METRICS REPORT", reportPeriod, athleteName, sportName);
+  currentRow++;
 
-  ws.columns = [
-    { header: "Athlete Name", key: "athlete", width: 28 },
-    { header: "Email", key: "email", width: 36 },
-    { header: "PUP ID", key: "pupid", width: 18 },
-    { header: "Week", key: "week", width: 14 },
-    { header: "Agility", key: "agility", width: 12 },
-    { header: "Strength", key: "strength", width: 12 },
-    { header: "Power", key: "power", width: 12 },
-    { header: "Flexibility", key: "flexibility", width: 12 },
-    { header: "Reaction Time", key: "reaction", width: 16 },
-    { header: "Coordination", key: "coordination", width: 14 },
+  // Calculate summary statistics
+  const totalWeeks = rows.length;
+  const avgAgility = rows.length > 0 ? (rows.reduce((s, r) => s + r["Agility"], 0) / rows.length).toFixed(1) : "N/A";
+  const avgStrength = rows.length > 0 ? (rows.reduce((s, r) => s + r["Strength"], 0) / rows.length).toFixed(1) : "N/A";
+  const avgPower = rows.length > 0 ? (rows.reduce((s, r) => s + r["Power"], 0) / rows.length).toFixed(1) : "N/A";
+  const avgFlexibility = rows.length > 0 ? (rows.reduce((s, r) => s + r["Flexibility"], 0) / rows.length).toFixed(1) : "N/A";
+  const avgReaction = rows.length > 0 ? (rows.reduce((s, r) => s + r["Reaction Time"], 0) / rows.length).toFixed(1) : "N/A";
+  const avgCoordination = rows.length > 0 ? (rows.reduce((s, r) => s + r["Coordination"], 0) / rows.length).toFixed(1) : "N/A";
+
+  // ===== ATHLETE INFO SECTION =====
+  const athleteInfo = rows[0];
+  ws.getCell(`A${currentRow}`).value = "I. ATHLETE INFORMATION";
+  ws.getCell(`A${currentRow}`).font = { bold: true, size: 12, color: { argb: "FF8B0000" } };
+  currentRow++;
+
+  const infoData = [
+    ["Field", "Value"],
+    ["Full Name", athleteInfo?.["Athlete Name"] || athleteName],
+    ["Email", athleteInfo?.["Email"] || "—"],
+    ["PUP ID", athleteInfo?.["PUP ID"] || "—"],
+    ["Sport", sportName],
+    ["Weeks of Data", totalWeeks],
   ];
 
-  rows.forEach((r) =>
-    ws.addRow({
-      athlete: r["Athlete Name"],
-      email: r["Email"],
-      pupid: r["PUP ID"],
-      week: r["Week"],
-      agility: r["Agility"],
-      strength: r["Strength"],
-      power: r["Power"],
-      flexibility: r["Flexibility"],
-      reaction: r["Reaction Time"],
-      coordination: r["Coordination"],
-    })
-  );
+  infoData.forEach((r, idx) => {
+    const rowNum = currentRow + idx;
+    ws.getCell(`B${rowNum}`).value = r[0];
+    ws.getCell(`C${rowNum}`).value = r[1];
+    
+    if (idx === 0) {
+      ["B", "C"].forEach(col => {
+        ws.getCell(`${col}${rowNum}`).font = { bold: true, color: { argb: "FFFFFFFF" } };
+        ws.getCell(`${col}${rowNum}`).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF8B0000" } };
+      });
+    }
+  });
+  currentRow += infoData.length + 2;
+
+  // ===== AVERAGE METRICS SECTION =====
+  ws.getCell(`A${currentRow}`).value = "II. AVERAGE PERFORMANCE METRICS";
+  ws.getCell(`A${currentRow}`).font = { bold: true, size: 12, color: { argb: "FF8B0000" } };
+  currentRow++;
+
+  const metricsData = [
+    ["Metric", "Average Score", "Rating"],
+    ["Agility", avgAgility, getPerformanceRating(parseFloat(avgAgility as string))],
+    ["Strength", avgStrength, getPerformanceRating(parseFloat(avgStrength as string))],
+    ["Power", avgPower, getPerformanceRating(parseFloat(avgPower as string))],
+    ["Flexibility", avgFlexibility, getPerformanceRating(parseFloat(avgFlexibility as string))],
+    ["Reaction Time", avgReaction, getPerformanceRating(parseFloat(avgReaction as string))],
+    ["Coordination", avgCoordination, getPerformanceRating(parseFloat(avgCoordination as string))],
+  ];
+
+  metricsData.forEach((r, idx) => {
+    const rowNum = currentRow + idx;
+    ws.getCell(`B${rowNum}`).value = r[0];
+    ws.getCell(`C${rowNum}`).value = r[1];
+    ws.getCell(`D${rowNum}`).value = r[2];
+    ws.getCell(`C${rowNum}`).alignment = { horizontal: "center" };
+    ws.getCell(`D${rowNum}`).alignment = { horizontal: "center" };
+    
+    if (idx === 0) {
+      ["B", "C", "D"].forEach(col => {
+        ws.getCell(`${col}${rowNum}`).font = { bold: true, color: { argb: "FFFFFFFF" } };
+        ws.getCell(`${col}${rowNum}`).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF8B0000" } };
+      });
+    }
+  });
+  currentRow += metricsData.length + 2;
+
+  // ===== WEEKLY DATA SECTION =====
+  ws.getCell(`A${currentRow}`).value = "III. WEEKLY PERFORMANCE DATA";
+  ws.getCell(`A${currentRow}`).font = { bold: true, size: 12, color: { argb: "FF8B0000" } };
+  currentRow++;
+
+  // Table headers
+  const headers = ["#", "Week", "Agility", "Strength", "Power", "Flexibility", "Reaction", "Coordination"];
+  headers.forEach((header, idx) => {
+    const col = String.fromCharCode(65 + idx);
+    ws.getCell(`${col}${currentRow}`).value = header;
+    ws.getCell(`${col}${currentRow}`).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    ws.getCell(`${col}${currentRow}`).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF8B0000" } };
+    ws.getCell(`${col}${currentRow}`).alignment = { horizontal: "center" };
+  });
+  currentRow++;
+
+  // Data rows
+  rows.forEach((r, idx) => {
+    ws.getCell(`A${currentRow}`).value = idx + 1;
+    ws.getCell(`B${currentRow}`).value = r["Week"];
+    ws.getCell(`C${currentRow}`).value = r["Agility"];
+    ws.getCell(`D${currentRow}`).value = r["Strength"];
+    ws.getCell(`E${currentRow}`).value = r["Power"];
+    ws.getCell(`F${currentRow}`).value = r["Flexibility"];
+    ws.getCell(`G${currentRow}`).value = r["Reaction Time"];
+    ws.getCell(`H${currentRow}`).value = r["Coordination"];
+    
+    ["A", "B", "C", "D", "E", "F", "G", "H"].forEach(col => {
+      ws.getCell(`${col}${currentRow}`).alignment = { horizontal: "center" };
+    });
+    currentRow++;
+  });
+  currentRow += 2;
+
+  // ===== CHART SECTION =====
+  ws.getCell(`A${currentRow}`).value = "IV. PERFORMANCE TREND VISUALIZATION";
+  ws.getCell(`A${currentRow}`).font = { bold: true, size: 12, color: { argb: "FF8B0000" } };
+  currentRow++;
 
   const dataUrl = await toPng(chartNode, { cacheBust: true, backgroundColor: "#FFFFFF" });
   const base64 = dataUrl.split(",")[1];
   const imgId = wb.addImage({ base64, extension: "png" });
 
-  const startRow = rows.length + 3;
   ws.addImage(imgId, {
-    tl: { col: 0, row: startRow },
+    tl: { col: 0, row: currentRow },
     ext: { width: 900, height: 420 },
     editAs: "oneCell",
   });
+  currentRow += 24;
+
+  // ===== FOOTER =====
+  ws.mergeCells(`A${currentRow}:H${currentRow}`);
+  ws.getCell(`A${currentRow}`).value = "— End of Report —";
+  ws.getCell(`A${currentRow}`).font = { italic: true, size: 10, color: { argb: "FF666666" } };
+  ws.getCell(`A${currentRow}`).alignment = { horizontal: "center" };
+  
+  currentRow++;
+  ws.mergeCells(`A${currentRow}:H${currentRow}`);
+  ws.getCell(`A${currentRow}`).value = "This report was automatically generated by AthleTrack Admin System. For questions, contact the Sports Development Program Office.";
+  ws.getCell(`A${currentRow}`).font = { size: 9, color: { argb: "FF999999" } };
+  ws.getCell(`A${currentRow}`).alignment = { horizontal: "center", wrapText: true };
+
+  // Set column widths
+  ws.getColumn(1).width = 5;
+  ws.getColumn(2).width = 14;
+  ws.getColumn(3).width = 10;
+  ws.getColumn(4).width = 10;
+  ws.getColumn(5).width = 10;
+  ws.getColumn(6).width = 12;
+  ws.getColumn(7).width = 12;
+  ws.getColumn(8).width = 14;
 
   const buf = await wb.xlsx.writeBuffer();
-  saveAs(new Blob([buf]), `${athleteSlug}-performance-with-chart.xlsx`);
+  saveAs(new Blob([buf]), `AthleTrack_Athlete_Performance_${athleteSlug}_${today}.xlsx`);
+}
+
+// Helper function to get performance rating
+function getPerformanceRating(score: number): string {
+  if (isNaN(score)) return "N/A";
+  if (score >= 90) return "Excellent";
+  if (score >= 80) return "Very Good";
+  if (score >= 70) return "Good";
+  if (score >= 60) return "Average";
+  if (score >= 50) return "Below Average";
+  return "Needs Improvement";
 }
 
 /* ── View component (UI unchanged; just wired export like SportsDetail) ───── */
@@ -518,7 +855,7 @@ export default function AthleteDetail() {
                   onClick={async () => {
                     const node = prepostChartRef.current;
                     if (!node) return;
-                    await exportChartAsPdf(node, `${slugify(athleteFull)}-prepost-chart.pdf`);
+                    await exportChartAsPdf(node, `AthleTrack_Athlete_PrePost_${slugify(athleteFull)}.pdf`, athleteFull, sportName, "PRE-TEST VS POST-TEST COMPARISON");
                   }}
                 >
                   Export PDF
@@ -529,7 +866,7 @@ export default function AthleteDetail() {
                   onClick={async () => {
                     const node = prepostChartRef.current;
                     if (!node) return;
-                    await exportPrepostXlsxWithChartForAthlete(slugify(athleteFull), prepostExportRows, node);
+                    await exportPrepostXlsxWithChartForAthlete(slugify(athleteFull), athleteFull, sportName, prepostExportRows, node);
                   }}
                 >
                   Export XLSX
@@ -572,7 +909,7 @@ export default function AthleteDetail() {
                   onClick={async () => {
                     const node = performanceChartRef.current;
                     if (!node) return;
-                    await exportChartAsPdf(node, `${slugify(athleteFull)}-performance-chart.pdf`);
+                    await exportChartAsPdf(node, `AthleTrack_Athlete_Performance_${slugify(athleteFull)}.pdf`, athleteFull, sportName, "WEEKLY PERFORMANCE METRICS");
                   }}
                 >
                   Export PDF
@@ -585,6 +922,8 @@ export default function AthleteDetail() {
                     if (!node) return;
                     await exportPerformanceXlsxWithChartForAthlete(
                       slugify(athleteFull),
+                      athleteFull,
+                      sportName,
                       performanceExportRows,
                       node
                     );

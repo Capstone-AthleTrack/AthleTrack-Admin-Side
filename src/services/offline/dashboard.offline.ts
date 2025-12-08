@@ -157,7 +157,7 @@ export async function fetchUsageSeriesOffline(): Promise<{
     {
       key: CACHE_KEYS.usageSeries(),
       ttl: USAGE_SERIES_TTL,
-      strategy: 'network-first',
+      strategy: 'stale-while-revalidate', // Show cached immediately, refresh in background
     }
   );
 
@@ -234,7 +234,7 @@ export async function fetchLoginSeriesOffline(): Promise<{
     {
       key: CACHE_KEYS.loginSeries(),
       ttl: LOGIN_SERIES_TTL,
-      strategy: 'network-first',
+      strategy: 'stale-while-revalidate', // Show cached immediately, refresh in background
     }
   );
 }

@@ -131,4 +131,33 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  build: {
+    // Increase chunk size warning limit (since we have large dependencies)
+    chunkSizeWarningLimit: 600,
+    
+    rollupOptions: {
+      output: {
+        // Manual chunk splitting for better caching and smaller initial load
+        manualChunks: {
+          // React core
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+          
+          // Ant Design (largest dependency)
+          'vendor-antd': ['antd', '@ant-design/icons'],
+          
+          // Supabase
+          'vendor-supabase': ['@supabase/supabase-js'],
+          
+          // Charts
+          'vendor-charts': ['recharts'],
+          
+          // Export utilities (PDF, Excel, Image)
+          'vendor-export': ['jspdf', 'exceljs', 'html-to-image'],
+          
+          // Other utilities
+          'vendor-utils': ['dayjs', 'idb'],
+        },
+      },
+    },
+  },
 });

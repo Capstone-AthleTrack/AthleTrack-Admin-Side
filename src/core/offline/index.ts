@@ -46,6 +46,7 @@ export {
   cachedQuery,
   prefetch,
   CacheKeys,
+  subscribeToCacheUpdates,
   type CacheStrategy,
   type CacheQueryOptions,
   type CacheQueryResult,

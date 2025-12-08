@@ -22,6 +22,7 @@ export interface UserProfile {
   sport: string | null;
   team: string | null;
   created_at: string | null;
+  is_admin_panel_allowed?: boolean;
 }
 
 export interface UserProfileInsert {
@@ -39,6 +40,7 @@ export interface UserProfileUpdate {
   role?: DBRole;
   sport?: string | null;
   team?: string | null;
+  is_admin_panel_allowed?: boolean | null;
 }
 
 // ---- Cache Keys ----
@@ -69,10 +71,11 @@ function normSport(input?: string | null): string | null {
 function normTeam(input?: string | null): string | null {
   if (!input) return null;
   const t = input.normalize('NFKC').toLowerCase().replace(/[''`]/g, '').trim();
-  if (t === 'men' || t === 'mens') return 'men';
-  if (t === 'women' || t === 'womens') return 'women';
-  if (t.includes('women')) return 'women';
-  if (t.includes('men')) return 'men';
+  // Database enum values are "men's" and "women's"
+  if (t === 'men' || t === 'mens' || t === "men's") return "men's";
+  if (t === 'women' || t === 'womens' || t === "women's") return "women's";
+  if (t.includes('women')) return "women's";
+  if (t.includes('men')) return "men's";
   return null;
 }
 
@@ -117,6 +120,7 @@ export async function fetchUsersOffline(): Promise<{
             sport: row.sport as string | null,
             team: row.team as string | null,
             created_at: row.created_at as string | null,
+            is_admin_panel_allowed: row.is_admin_panel_allowed as boolean | undefined,
           }));
           
           // Enrich with pup_id from account_requests if missing
@@ -129,7 +133,7 @@ export async function fetchUsersOffline(): Promise<{
       // Fallback to direct table
       const { data: rows, error } = await supabase
         .from('profiles')
-        .select('id,email,role,status,full_name,phone,pup_id,sport,team,created_at')
+        .select('id,email,role,status,full_name,phone,pup_id,sport,team,created_at,is_admin_panel_allowed')
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -145,7 +149,7 @@ export async function fetchUsersOffline(): Promise<{
     {
       key: CACHE_KEYS.usersList(),
       ttl: USERS_LIST_TTL,
-      strategy: 'network-first',
+      strategy: 'stale-while-revalidate', // Show cached immediately, refresh in background
     }
   );
 }
@@ -293,21 +297,31 @@ export async function addUserOffline(user: UserProfileInsert): Promise<{ queued:
 }
 
 /**
- * Update user (role, sport, team) with offline queuing
+ * Update user (role, sport, team, is_admin_panel_allowed) with offline queuing
  * Uses direct database update (Edge Function is unreliable for role changes)
  */
 export async function updateUserOffline(
   userId: string,
   updates: UserProfileUpdate
 ): Promise<{ queued: boolean }> {
+  // Debug: Log incoming updates
+  console.log('[users] updateUserOffline called with:', { userId, updates });
+
+  // Normalize team to database enum values ("men's" or "women's")
+  const normalizedTeam = normTeam(updates.team);
+  
+  // Debug: Log normalization result
+  console.log('[users] normTeam result:', { input: updates.team, output: normalizedTeam });
+  
   const payload = {
     user_id: userId,
     sport: normSport(updates.sport),
-    team: updates.team === 'men' || updates.team === 'women' 
-      ? updates.team 
-      : normTeam(updates.team),
+    team: normalizedTeam,
     role: updates.role,
+    is_admin_panel_allowed: updates.is_admin_panel_allowed,
   };
+
+  console.log('[users] updateUserOffline payload:', { userId, payload });
 
   if (getNetworkStatus()) {
     // Build update object for direct DB (only include defined values)
@@ -315,8 +329,9 @@ export async function updateUserOffline(
     if (payload.sport !== undefined && payload.sport !== null) updateData.sport = payload.sport;
     if (payload.team !== undefined && payload.team !== null) updateData.team = payload.team;
     if (payload.role !== undefined && payload.role !== null) updateData.role = payload.role;
+    if (payload.is_admin_panel_allowed !== undefined) updateData.is_admin_panel_allowed = payload.is_admin_panel_allowed;
 
-    console.log('[users] updateUserOffline payload:', { userId, updateData });
+    console.log('[users] Direct DB update data:', { userId, updateData });
 
     // Direct database update (bypasses unreliable Edge Function)
     try {
@@ -326,18 +341,27 @@ export async function updateUserOffline(
         .eq('id', userId)
         .select();
 
-      if (error) throw error;
+      if (error) {
+        console.error('[users] Direct update failed:', { 
+          code: error.code, 
+          message: error.message, 
+          details: error.details,
+          hint: error.hint 
+        });
+        throw error;
+      }
 
       console.log('[users] Update success, updated row:', data);
       // Invalidate cache
       await cacheDelete(CACHE_KEYS.usersList());
       return { queued: false };
     } catch (dbError) {
-      console.warn('[users] Direct update failed, queuing:', dbError);
+      console.warn('[users] Direct update failed, queuing for later:', dbError);
     }
   }
 
   // Queue for later sync
+  console.log('[users] Queuing update for later sync:', payload);
   await queueAdd('admin:updateUser', payload);
   return { queued: true };
 }

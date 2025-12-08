@@ -8,12 +8,15 @@ import {
   message,
   Modal,
   Form,
+  Switch,
+  Tooltip,
 } from "antd";
 import {
   UserOutlined,
   SearchOutlined,
   PlusOutlined,
   RightOutlined,
+  QuestionCircleOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime";
@@ -50,6 +53,7 @@ interface RequestItem {
   issuedAt: string; // ISO
   status: ReqStatus;
   reason?: string;
+  isAdminPanelAllowed?: boolean;
   extra?: {
     role?: string;
     phone?: string;
@@ -76,6 +80,7 @@ interface ProfileRow {
   sport: string | null;
   team: string | null;
   created_at: string | null;
+  is_admin_panel_allowed?: boolean;
 }
 
 // ProfileInsert and AdminListUsersRow types moved to users.offline.ts
@@ -103,7 +108,8 @@ const statusToReq: Record<Exclude<DBStatus, null>, ReqStatus> = {
 function toUiTeam(val?: string | null): string | undefined {
   const n = normTeam(val);
   if (!n) return val ?? undefined;
-  return n === "men" ? "men's" : "women's";
+  // normTeam now returns "men's" or "women's" directly
+  return n;
 }
 
 /* ---------- map DB row -> existing UI item shape ---------- */
@@ -116,6 +122,7 @@ function toItem(p: ProfileRow): RequestItem {
     deviceName: undefined, // not stored; keep placeholder
     issuedAt: p.created_at || new Date().toISOString(),
     status: statusToReq[(p.status ?? "pending") as Exclude<DBStatus, null>],
+    isAdminPanelAllowed: p.is_admin_panel_allowed ?? false,
     extra: {
       role: roleDbToUi(p.role),
       phone: p.phone ?? undefined,
@@ -144,11 +151,12 @@ function Labeled({ label, value }: { label: string; value?: string }) {
 function normTeam(input?: string | null): string | null {
   if (!input) return null;
   // accept "men", "women", "men's", "women's", smart quotes, etc.
-  const t = input.normalize("NFKC").toLowerCase().replace(/[’'`]/g, "").trim();
-  if (t === "men" || t === "mens") return "men";
-  if (t === "women" || t === "womens") return "women";
-  if (t.includes("women")) return "women";
-  if (t.includes("men")) return "men";
+  // Returns database enum values: "men's" or "women's"
+  const t = input.normalize("NFKC").toLowerCase().replace(/[''`]/g, "").trim();
+  if (t === "men" || t === "mens" || t === "men's") return "men's";
+  if (t === "women" || t === "womens" || t === "women's") return "women's";
+  if (t.includes("women")) return "women's";
+  if (t.includes("men")) return "men's";
   return null;
 }
 
@@ -228,6 +236,7 @@ export default function UserManagement() {
         sport: p.sport,
         team: p.team,
         created_at: p.created_at,
+        is_admin_panel_allowed: p.is_admin_panel_allowed,
       }));
 
       setData(items);
@@ -334,7 +343,7 @@ export default function UserManagement() {
   const openEdit = () => {
     if (!selected) return;
     setIsEditOpen(true);
-    // Normalize the incoming team so it matches the Select option values
+    // Normalize the incoming team so it matches the Select option values ("men's" or "women's")
     const initialTeam = normTeam(selected.extra?.team) || "";
     editForm.setFieldsValue({
       name: selected.name || "",
@@ -343,7 +352,8 @@ export default function UserManagement() {
       phone: selected.extra?.phone || "",
       pupId: selected.extra?.pupId || "",
       sport: selected.extra?.sport || "",
-      team: initialTeam, // ensure value is "men" | "women" for the Select
+      team: initialTeam, // "men's" or "women's" - matches database enum
+      isAdminPanelAllowed: selected.isAdminPanelAllowed ?? false,
     });
   };
   const closeEdit = () => {
@@ -351,7 +361,7 @@ export default function UserManagement() {
     editForm.resetFields();
   };
 
-  // Only update Sport, Team, Role (others are read-only) via Edge Function (Security Definer)
+  // Only update Sport, Team, Role, is_admin_panel_allowed (others are read-only)
   const handleEditSubmit = async () => {
     if (!selected) return;
     try {
@@ -360,11 +370,21 @@ export default function UserManagement() {
       const roleDb = roleUiToDb(values.role);
       const supportedRoles = new Set(["admin", "coach", "athlete", "user"]);
 
-      // Use offline-enabled update
-      const { queued } = await updateUserOffline(selected.id, {
+      // Debug: Log the form values being submitted
+      console.log('[UserManagement] handleEditSubmit values:', {
         sport: values.sport,
         team: values.team,
+        role: values.role,
+        roleDb,
+        isAdminPanelAllowed: values.isAdminPanelAllowed,
+      });
+
+      // Use offline-enabled update for all fields (including is_admin_panel_allowed)
+      const { queued } = await updateUserOffline(selected.id, {
+        sport: values.sport,
+        team: values.team, // This will be normalized to "men's" or "women's" in updateUserOffline
         role: roleDb && supportedRoles.has(roleDb) ? roleDb : undefined,
+        is_admin_panel_allowed: values.isAdminPanelAllowed ?? false,
       });
 
       if (queued) {
@@ -377,7 +397,7 @@ export default function UserManagement() {
       await loadProfiles();
       setSelectedId(selected.id); // keep focus
     } catch (err) {
-      console.error(err);
+      console.error('[UserManagement] handleEditSubmit error:', err);
       message.error("Failed to update profile.");
     }
   };
@@ -627,10 +647,10 @@ export default function UserManagement() {
             >
               <Select
                 placeholder="Select team"
-                /* keep UI label the same but send enum-safe values */
+                /* Send database enum values directly: "men's" or "women's" */
                 options={allowedTeamsForSport(addSportValue).map((t) => ({
                   label: t === "men's" ? "Men's" : "Women's",
-                  value: t === "men's" ? "men" : "women",
+                  value: t, // "men's" or "women's" - matches database enum
                 }))}
               />
             </Form.Item>
@@ -709,14 +729,43 @@ export default function UserManagement() {
             >
               <Select
                 placeholder="Select team"
-                /* keep UI label the same but send enum-safe values */
+                /* Send database enum values directly: "men's" or "women's" */
                 options={allowedTeamsForSport(editSportValue).map((t) => ({
                   label: t === "men's" ? "Men's" : "Women's",
-                  value: t === "men's" ? "men" : "women",
+                  value: t, // "men's" or "women's" - matches database enum
                 }))}
               />
             </Form.Item>
           </div>
+
+          {/* Admin Panel Access Toggle - Only show for coaches */}
+          <Form.Item
+            name="isAdminPanelAllowed"
+            valuePropName="checked"
+            label={
+              <span className="flex items-center gap-2">
+                Allow Admin Panel Access
+                <Tooltip title="When enabled, this user can access the admin web dashboard. Useful for coaches who need to view reports and manage athletes.">
+                  <QuestionCircleOutlined className="text-gray-400 cursor-help" />
+                </Tooltip>
+              </span>
+            }
+          >
+            <Switch
+              checkedChildren="Yes"
+              unCheckedChildren="No"
+              style={{ backgroundColor: editForm.getFieldValue('isAdminPanelAllowed') ? BRAND.maroon : undefined }}
+            />
+          </Form.Item>
+          
+          {/* Show Admin Coach badge if applicable */}
+          {editForm.getFieldValue('role') === 'Coach' && editForm.getFieldValue('isAdminPanelAllowed') && (
+            <div className="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200">
+              <span className="text-amber-800 text-sm font-medium">
+                🏅 This user is an <strong>Admin Coach</strong> - they can access both the mobile app and admin panel.
+              </span>
+            </div>
+          )}
         </Form>
       </Modal>
 

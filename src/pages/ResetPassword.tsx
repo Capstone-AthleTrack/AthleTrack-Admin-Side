@@ -1,19 +1,49 @@
-import { Card, Form, Input, Button, Typography, Divider, message } from "antd";
-import { MailOutlined } from "@ant-design/icons";
+import { useState, useCallback } from "react";
+import { Card, Form, Input, Button, Typography, Divider, App as AntdApp } from "antd";
+import { MailOutlined, CheckCircleOutlined } from "@ant-design/icons";
 import { BRAND } from "@/brand";
+import { supabase } from "@/core/supabase";
+
+interface ResetPasswordValues {
+  email: string;
+}
 
 export default function ResetPassword() {
-  const [form] = Form.useForm();
+  const [form] = Form.useForm<ResetPasswordValues>();
+  const [loading, setLoading] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
+  
+  // Use AntD App context for React 19 compatibility
+  const { message } = AntdApp.useApp();
 
-  interface ResetPasswordValues {
-    email: string;
-  }
+  const onFinish = useCallback(async (values: ResetPasswordValues) => {
+    setLoading(true);
+    try {
+      const email = values.email?.trim().toLowerCase();
+      if (!email) {
+        message.error("Please enter your email address");
+        return;
+      }
 
-  const onFinish = async (values: ResetPasswordValues) => {
-    // No auth logic here — UI-only noop handler.
-    console.log("Reset link for:", values.email);
-    message.success("If that email exists, we’ve sent a reset link.");
-  };
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/update-password`,
+      });
+
+      if (error) {
+        // Log for debugging but don't reveal to user (security best practice)
+        console.error("Reset error:", error);
+      }
+
+      // Always show success message (don't reveal if email exists or not)
+      setEmailSent(true);
+      message.success("If that email is registered, we've sent a reset link!");
+    } catch (err) {
+      console.error("Reset failed:", err);
+      message.error("Something went wrong. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }, [message]);
 
   return (
     <div className="min-h-screen w-screen grid grid-cols-1 lg:grid-cols-[60%_40%] font-sans overflow-hidden">
@@ -92,58 +122,95 @@ export default function ResetPassword() {
 
           <Divider style={{ margin: "12px 0 18px" }} />
 
-          <Form form={form} layout="vertical" onFinish={onFinish} requiredMark={false}>
-            <Form.Item
-              label={<span className="text-[17px] font-medium">Email Address</span>}
-              name="email"
-              rules={[
-                { required: true, message: "Email is required" },
-                { type: "email", message: "Enter a valid email" },
-              ]}
-              style={{ marginBottom: 16 }}
-            >
-              <Input
-                size="large"
-                prefix={<MailOutlined className="text-black/40 mr-1" />}
-                placeholder="you@athletrack.com"
-                className="rounded-xl"
-                style={{
-                  background: "#FFE681",
-                  borderRadius: 6,
-                  height: 38,
-                  borderColor: "transparent",
-                }}
+          {emailSent ? (
+            <div className="text-center py-6">
+              <CheckCircleOutlined 
+                style={{ fontSize: 48, color: "#52c41a" }} 
+                className="mb-4"
               />
-            </Form.Item>
-
-            <Button
-              htmlType="submit"
-              type="primary"
-              className="w-full !h-11 !rounded-full flex items-center justify-center"
-              style={{
-                fontSize: "17px",
-                fontWeight: 600,
-                background: BRAND.maroon,
-                border: "none",
-                boxShadow: "0 8px 14px rgba(128,0,0,0.25)",
-              }}
-            >
-              Send Reset Link
-            </Button>
-
-            <Divider style={{ margin: "18px 0 10px" }} />
-
-            <div className="text-center mt-3 text-xs" style={{ fontSize: "15px" }}>
-              Remembered your password?{" "}
-              <a
-                href="/sign-in"
-                className="font-semibold hover:underline"
-                style={{ color: BRAND.maroon, fontSize: "15px" }}
+              <Typography.Title level={4} style={{ color: BRAND.maroon, margin: "16px 0 8px" }}>
+                Check Your Email
+              </Typography.Title>
+              <Typography.Text type="secondary" style={{ fontSize: 14 }}>
+                We've sent a password reset link to your email address. 
+                Click the link in the email to set a new password.
+              </Typography.Text>
+              <Divider style={{ margin: "24px 0 16px" }} />
+              <Button
+                type="link"
+                onClick={() => {
+                  setEmailSent(false);
+                  form.resetFields();
+                }}
+                style={{ color: BRAND.maroon, fontWeight: 600 }}
               >
-                Back to sign in.
-              </a>
+                Didn't receive it? Try again
+              </Button>
+              <div className="mt-3">
+                <a
+                  href="/sign-in"
+                  className="font-semibold hover:underline"
+                  style={{ color: BRAND.maroon, fontSize: "15px" }}
+                >
+                  Back to sign in
+                </a>
+              </div>
             </div>
-          </Form>
+          ) : (
+            <Form form={form} layout="vertical" onFinish={onFinish} requiredMark={false}>
+              <Form.Item
+                label={<span className="text-[17px] font-medium">Email Address</span>}
+                name="email"
+                rules={[
+                  { required: true, message: "Email is required" },
+                  { type: "email", message: "Enter a valid email" },
+                ]}
+                style={{ marginBottom: 16 }}
+              >
+                <Input
+                  size="large"
+                  prefix={<MailOutlined className="text-black/40 mr-1" />}
+                  placeholder="you@gmail.com"
+                  className="rounded-xl"
+                  style={{
+                    background: "#FFE681",
+                    borderRadius: 6,
+                    height: 38,
+                    borderColor: "transparent",
+                  }}
+                />
+              </Form.Item>
+
+              <Button
+                htmlType="submit"
+                type="primary"
+                loading={loading}
+                className="w-full !h-11 !rounded-full flex items-center justify-center"
+                style={{
+                  fontSize: "17px",
+                  fontWeight: 600,
+                  background: BRAND.maroon,
+                  border: "none",
+                  boxShadow: "0 8px 14px rgba(128,0,0,0.25)",
+                }}
+              >
+                Send Reset Link
+              </Button>
+
+              <Divider style={{ margin: "18px 0 10px" }} />
+
+              <div className="text-center mt-3 text-xs" style={{ fontSize: "15px" }}>
+                Remembered your password?{" "}
+                <a
+                  href="/sign-in"
+                  className="font-semibold hover:underline"
+                  style={{ color: BRAND.maroon, fontSize: "15px" }}
+                >
+                  Back to sign in.
+                </a>
+              </div>
+            </Form>
+          )}
         </Card>
       </div>
     </div>

@@ -265,7 +265,7 @@ export async function fetchRequestsOffline(): Promise<{
     {
       key: CACHE_KEYS.requestsList(),
       ttl: REQUESTS_LIST_TTL,
-      strategy: 'network-first',
+      strategy: 'stale-while-revalidate', // Show cached immediately, refresh in background
     }
   );
 }

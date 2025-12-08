@@ -84,20 +84,37 @@ const actionHandlers: Record<string, ActionHandler> = {
 
   // Update user (admin) - direct database update (Edge Function is unreliable for role changes)
   'admin:updateUser': async (payload) => {
-    const { user_id, sport, team, role } = payload as {
+    const { user_id, sport, team, role, is_admin_panel_allowed } = payload as {
       user_id: string;
       sport?: string | null;
       team?: string | null;
       role?: string | null;
+      is_admin_panel_allowed?: boolean | null;
+    };
+
+    // Normalize team value to database enum ("men's" or "women's")
+    const normalizeTeam = (t?: string | null): string | null => {
+      if (!t) return null;
+      const v = t.toLowerCase().replace(/[''`]/g, '').trim();
+      if (v === 'men' || v === 'mens') return "men's";
+      if (v === 'women' || v === 'womens') return "women's";
+      if (v === "men's" || v === "women's") return t; // Already correct
+      if (v.includes('women')) return "women's";
+      if (v.includes('men')) return "men's";
+      return null;
     };
 
     // Build update object (only include defined values)
     const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (sport !== undefined && sport !== null) updateData.sport = sport;
-    if (team !== undefined && team !== null) updateData.team = team;
+    if (team !== undefined && team !== null) {
+      const normalizedTeam = normalizeTeam(team);
+      if (normalizedTeam) updateData.team = normalizedTeam;
+    }
     if (role !== undefined && role !== null) updateData.role = role;
+    if (is_admin_panel_allowed !== undefined) updateData.is_admin_panel_allowed = is_admin_panel_allowed;
 
-    console.log('[sync] admin:updateUser payload:', { user_id, updateData });
+    console.log('[sync] admin:updateUser payload:', { user_id, originalTeam: team, updateData });
 
     // Direct database update (bypasses unreliable Edge Function)
     const { data, error } = await supabase
@@ -107,7 +124,7 @@ const actionHandlers: Record<string, ActionHandler> = {
       .select();
 
     if (error) {
-      console.error('[sync] admin:updateUser failed:', error);
+      console.error('[sync] admin:updateUser failed:', { code: error.code, details: error.details, hint: error.hint, message: error.message });
       throw error;
     }
 

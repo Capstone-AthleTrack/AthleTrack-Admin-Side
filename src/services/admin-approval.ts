@@ -20,6 +20,7 @@ export type LiteProfile = {
   role: Role;
   status?: Status;
   is_active?: boolean | null; // legacy compat
+  is_admin_panel_allowed?: boolean | null; // allows non-admin users to access admin panel
 };
 
 type RoleStatusRow = { role: Role | null; status: Status | null };
@@ -151,7 +152,7 @@ export async function getMyProfile(): Promise<LiteProfile | null> {
 
   const { data, error } = await supabase
     .from("profiles")
-    .select("role,status,is_active")
+    .select("role,status,is_active,is_admin_panel_allowed")
     .eq("id", user.id)
     .limit(1)
     .maybeSingle();

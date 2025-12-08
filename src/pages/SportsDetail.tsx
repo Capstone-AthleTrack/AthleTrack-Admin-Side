@@ -252,28 +252,155 @@ const sportDetails = {
 type CoachItem = string | { name: string; image?: string };
 
 /* ── Export helpers (pure functions; no UI changes) ──────────────────────── */
-async function exportChartAsPdf(node: HTMLElement, filename: string) {
+
+// Helper to add formal header to worksheet
+function addFormalHeader(ws: ExcelJS.Worksheet, reportTitle: string, reportPeriod: string, sportName: string) {
+  const now = new Date();
+
+  // Row 1: Organization
+  ws.mergeCells("A1:J1");
+  ws.getCell("A1").value = "POLYTECHNIC UNIVERSITY OF THE PHILIPPINES";
+  ws.getCell("A1").font = { bold: true, size: 14 };
+  ws.getCell("A1").alignment = { horizontal: "center" };
+
+  // Row 2: Department
+  ws.mergeCells("A2:J2");
+  ws.getCell("A2").value = "Sports Development Program Office";
+  ws.getCell("A2").font = { size: 12 };
+  ws.getCell("A2").alignment = { horizontal: "center" };
+
+  // Row 3: System
+  ws.mergeCells("A3:J3");
+  ws.getCell("A3").value = "AthleTrack - Athletic Performance Management System";
+  ws.getCell("A3").font = { size: 11, italic: true };
+  ws.getCell("A3").alignment = { horizontal: "center" };
+
+  // Row 4: Empty
+  ws.getRow(4).height = 10;
+
+  // Row 5: Report Title
+  ws.mergeCells("A5:J5");
+  ws.getCell("A5").value = reportTitle;
+  ws.getCell("A5").font = { bold: true, size: 16, color: { argb: "FF8B0000" } };
+  ws.getCell("A5").alignment = { horizontal: "center" };
+
+  // Row 6: Sport Name
+  ws.mergeCells("A6:J6");
+  ws.getCell("A6").value = `Sport: ${sportName}`;
+  ws.getCell("A6").font = { bold: true, size: 12 };
+  ws.getCell("A6").alignment = { horizontal: "center" };
+
+  // Row 7: Report Period
+  ws.mergeCells("A7:J7");
+  ws.getCell("A7").value = reportPeriod;
+  ws.getCell("A7").font = { size: 11 };
+  ws.getCell("A7").alignment = { horizontal: "center" };
+
+  // Row 8: Empty
+  ws.getRow(8).height = 10;
+
+  // Row 9: Generated info
+  ws.getCell("A9").value = "Date Generated:";
+  ws.getCell("A9").font = { bold: true, size: 10 };
+  ws.getCell("B9").value = now.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  ws.getCell("B9").font = { size: 10 };
+
+  ws.getCell("E9").value = "Time:";
+  ws.getCell("E9").font = { bold: true, size: 10 };
+  ws.getCell("F9").value = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true });
+  ws.getCell("F9").font = { size: 10 };
+
+  // Row 10: Prepared by
+  ws.getCell("A10").value = "Prepared by:";
+  ws.getCell("A10").font = { bold: true, size: 10 };
+  ws.getCell("B10").value = "AthleTrack Admin System";
+  ws.getCell("B10").font = { size: 10 };
+
+  ws.getCell("E10").value = "Report Type:";
+  ws.getCell("E10").font = { bold: true, size: 10 };
+  ws.getCell("F10").value = "Automated Export";
+  ws.getCell("F10").font = { size: 10 };
+
+  // Row 11: Horizontal line (using border)
+  ws.getRow(11).height = 5;
+  for (let col = 1; col <= 10; col++) {
+    ws.getCell(11, col).border = { bottom: { style: "medium", color: { argb: "FF8B0000" } } };
+  }
+
+  return 12; // Return the next available row
+}
+
+// Formal PDF export with header
+async function exportChartAsPdf(node: HTMLElement, filename: string, sportName: string, reportTitle: string) {
   const dataUrl = await toPng(node, { cacheBust: true, backgroundColor: "#FFFFFF" });
   const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
+  const now = new Date();
 
+  // Add formal header
+  doc.setFontSize(14);
+  doc.setFont("helvetica", "bold");
+  doc.text("POLYTECHNIC UNIVERSITY OF THE PHILIPPINES", pageWidth / 2, 30, { align: "center" });
+  
+  doc.setFontSize(11);
+  doc.setFont("helvetica", "normal");
+  doc.text("Sports Development Program Office", pageWidth / 2, 45, { align: "center" });
+  
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "italic");
+  doc.text("AthleTrack - Athletic Performance Management System", pageWidth / 2, 58, { align: "center" });
+
+  // Horizontal line
+  doc.setDrawColor(139, 0, 0); // Maroon
+  doc.setLineWidth(1.5);
+  doc.line(40, 68, pageWidth - 40, 68);
+
+  // Report title
+  doc.setFontSize(16);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(139, 0, 0);
+  doc.text(reportTitle, pageWidth / 2, 88, { align: "center" });
+  
+  // Sport name
+  doc.setFontSize(12);
+  doc.setTextColor(0, 0, 0);
+  doc.text(`Sport: ${sportName}`, pageWidth / 2, 105, { align: "center" });
+
+  // Date generated
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "normal");
+  doc.text(`Generated: ${now.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })} at ${now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true })}`, pageWidth / 2, 120, { align: "center" });
+
+  // Add chart image
   const img = new Image();
   img.src = dataUrl;
   await new Promise<void>((resolve) => (img.onload = () => resolve()));
 
-  const ratio = Math.min(pageWidth / img.width, pageHeight / img.height);
+  const availableHeight = pageHeight - 180; // Account for header and footer
+  const availableWidth = pageWidth - 80;
+  const ratio = Math.min(availableWidth / img.width, availableHeight / img.height);
   const w = img.width * ratio;
   const h = img.height * ratio;
   const x = (pageWidth - w) / 2;
-  const y = (pageHeight - h) / 2;
+  const y = 135;
 
   doc.addImage(dataUrl, "PNG", x, y, w, h);
+
+  // Footer
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "italic");
+  doc.setTextColor(100, 100, 100);
+  doc.text("This report was automatically generated by AthleTrack Admin System.", pageWidth / 2, pageHeight - 30, { align: "center" });
+  doc.text("For questions, contact the Sports Development Program Office.", pageWidth / 2, pageHeight - 20, { align: "center" });
+
   doc.save(filename.endsWith(".pdf") ? filename : `${filename}.pdf`);
 }
 
+// Formal Pre/Post Test XLSX export
 async function exportPrepostXlsxWithChart(
   sportSlug: string,
+  sportDisplayName: string,
   rows: Array<{
     "Athlete Name": string;
     Email: string;
@@ -284,44 +411,151 @@ async function exportPrepostXlsxWithChart(
   chartNode: HTMLElement
 ) {
   const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet("Pre vs Post");
+  wb.creator = "AthleTrack Admin System";
+  wb.created = new Date();
+  
+  const ws = wb.addWorksheet("Pre vs Post Test Report");
+  const today = new Date().toISOString().split("T")[0];
+  const reportPeriod = `Report Period: Current Season | Generated: ${today}`;
+  
+  let currentRow = addFormalHeader(ws, "PRE-TEST VS POST-TEST COMPARISON REPORT", reportPeriod, sportDisplayName);
+  currentRow++;
 
-  ws.columns = [
-    { header: "Athlete Name", key: "name", width: 28 },
-    { header: "Email",        key: "email", width: 36 },
-    { header: "PUP ID",       key: "pup",   width: 18 },
-    { header: "Pre Test",     key: "pre",   width: 12 },
-    { header: "Post Test",    key: "post",  width: 12 },
+  // Calculate summary statistics
+  const validRows = rows.filter(r => typeof r["Pre Test"] === "number" && typeof r["Post Test"] === "number");
+  const totalAthletes = rows.length;
+  const avgPreTest = validRows.length > 0 
+    ? (validRows.reduce((sum, r) => sum + (r["Pre Test"] as number), 0) / validRows.length).toFixed(2)
+    : "N/A";
+  const avgPostTest = validRows.length > 0 
+    ? (validRows.reduce((sum, r) => sum + (r["Post Test"] as number), 0) / validRows.length).toFixed(2)
+    : "N/A";
+  const improved = validRows.filter(r => (r["Post Test"] as number) > (r["Pre Test"] as number)).length;
+  const improvementRate = validRows.length > 0 ? Math.round((improved / validRows.length) * 100) : 0;
+
+  // ===== SUMMARY SECTION =====
+  ws.getCell(`A${currentRow}`).value = "I. SUMMARY STATISTICS";
+  ws.getCell(`A${currentRow}`).font = { bold: true, size: 12, color: { argb: "FF8B0000" } };
+  currentRow++;
+
+  const summaryData = [
+    ["Metric", "Value", "Notes"],
+    ["Total Athletes", totalAthletes, "Athletes with test data"],
+    ["Average Pre-Test Score", avgPreTest, "Mean pre-test score"],
+    ["Average Post-Test Score", avgPostTest, "Mean post-test score"],
+    ["Athletes Improved", improved, `${improvementRate}% improvement rate`],
   ];
 
-  rows.forEach(r =>
-    ws.addRow({
-      name: r["Athlete Name"],
-      email: r.Email,
-      pup: r["PUP ID"],
-      pre: r["Pre Test"],
-      post: r["Post Test"],
-    })
-  );
+  summaryData.forEach((row, idx) => {
+    const rowNum = currentRow + idx;
+    ws.getCell(`B${rowNum}`).value = row[0];
+    ws.getCell(`C${rowNum}`).value = row[1];
+    ws.getCell(`D${rowNum}`).value = row[2];
+    
+    if (idx === 0) {
+      ["B", "C", "D"].forEach(col => {
+        ws.getCell(`${col}${rowNum}`).font = { bold: true, color: { argb: "FFFFFFFF" } };
+        ws.getCell(`${col}${rowNum}`).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF8B0000" } };
+      });
+    }
+  });
+  currentRow += summaryData.length + 2;
+
+  // ===== DATA TABLE SECTION =====
+  ws.getCell(`A${currentRow}`).value = "II. ATHLETE TEST DATA";
+  ws.getCell(`A${currentRow}`).font = { bold: true, size: 12, color: { argb: "FF8B0000" } };
+  currentRow++;
+
+  // Table headers
+  const headers = ["#", "Athlete Name", "Email", "PUP ID", "Pre-Test", "Post-Test", "Difference", "Status"];
+  headers.forEach((header, idx) => {
+    const col = String.fromCharCode(65 + idx); // A, B, C, D, E, F, G, H
+    ws.getCell(`${col}${currentRow}`).value = header;
+    ws.getCell(`${col}${currentRow}`).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    ws.getCell(`${col}${currentRow}`).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF8B0000" } };
+    ws.getCell(`${col}${currentRow}`).alignment = { horizontal: "center" };
+  });
+  currentRow++;
+
+  // Data rows
+  rows.forEach((r, idx) => {
+    const preVal = typeof r["Pre Test"] === "number" ? r["Pre Test"] : 0;
+    const postVal = typeof r["Post Test"] === "number" ? r["Post Test"] : 0;
+    const diff = postVal - preVal;
+    const status = diff > 0 ? "Improved" : diff < 0 ? "Declined" : "No Change";
+    
+    ws.getCell(`A${currentRow}`).value = idx + 1;
+    ws.getCell(`B${currentRow}`).value = r["Athlete Name"];
+    ws.getCell(`C${currentRow}`).value = r.Email;
+    ws.getCell(`D${currentRow}`).value = r["PUP ID"];
+    ws.getCell(`E${currentRow}`).value = r["Pre Test"];
+    ws.getCell(`F${currentRow}`).value = r["Post Test"];
+    ws.getCell(`G${currentRow}`).value = diff;
+    ws.getCell(`H${currentRow}`).value = status;
+    
+    ws.getCell(`A${currentRow}`).alignment = { horizontal: "center" };
+    ws.getCell(`E${currentRow}`).alignment = { horizontal: "center" };
+    ws.getCell(`F${currentRow}`).alignment = { horizontal: "center" };
+    ws.getCell(`G${currentRow}`).alignment = { horizontal: "center" };
+    ws.getCell(`H${currentRow}`).alignment = { horizontal: "center" };
+    
+    // Color code status
+    if (status === "Improved") {
+      ws.getCell(`H${currentRow}`).font = { color: { argb: "FF228B22" } }; // Green
+    } else if (status === "Declined") {
+      ws.getCell(`H${currentRow}`).font = { color: { argb: "FFDC143C" } }; // Red
+    }
+    
+    currentRow++;
+  });
+  currentRow += 2;
+
+  // ===== CHART SECTION =====
+  ws.getCell(`A${currentRow}`).value = "III. VISUAL COMPARISON";
+  ws.getCell(`A${currentRow}`).font = { bold: true, size: 12, color: { argb: "FF8B0000" } };
+  currentRow++;
 
   const dataUrl = await toPng(chartNode, { cacheBust: true, backgroundColor: "#FFFFFF" });
   const base64 = dataUrl.split(",")[1];
   const imgId = wb.addImage({ base64, extension: "png" });
 
-  const startRow = rows.length + 3;
   ws.addImage(imgId, {
-    tl: { col: 0, row: startRow },
-    ext: { width: 900, height: 420 },
+    tl: { col: 0, row: currentRow },
+    ext: { width: 850, height: 400 },
     editAs: "oneCell",
   });
+  currentRow += 22;
+
+  // ===== FOOTER =====
+  ws.mergeCells(`A${currentRow}:H${currentRow}`);
+  ws.getCell(`A${currentRow}`).value = "— End of Report —";
+  ws.getCell(`A${currentRow}`).font = { italic: true, size: 10, color: { argb: "FF666666" } };
+  ws.getCell(`A${currentRow}`).alignment = { horizontal: "center" };
+  
+  currentRow++;
+  ws.mergeCells(`A${currentRow}:H${currentRow}`);
+  ws.getCell(`A${currentRow}`).value = "This report was automatically generated by AthleTrack Admin System. For questions, contact the Sports Development Program Office.";
+  ws.getCell(`A${currentRow}`).font = { size: 9, color: { argb: "FF999999" } };
+  ws.getCell(`A${currentRow}`).alignment = { horizontal: "center", wrapText: true };
+
+  // Set column widths
+  ws.getColumn(1).width = 5;
+  ws.getColumn(2).width = 28;
+  ws.getColumn(3).width = 32;
+  ws.getColumn(4).width = 16;
+  ws.getColumn(5).width = 12;
+  ws.getColumn(6).width = 12;
+  ws.getColumn(7).width = 12;
+  ws.getColumn(8).width = 14;
 
   const buf = await wb.xlsx.writeBuffer();
-  saveAs(new Blob([buf]), `${sportSlug}-prepost-with-chart.xlsx`);
+  saveAs(new Blob([buf]), `AthleTrack_PrePost_Test_${sportSlug}_${today}.xlsx`);
 }
 
-/* Added: XLSX export for Performance Metrics (table + chart) with athlete metadata */
+/* Formal Performance Metrics XLSX export */
 async function exportPerformanceXlsxWithChart(
   sportSlug: string,
+  sportDisplayName: string,
   rows: Array<{
     "Athlete Name": string;
     "Email": string;
@@ -337,49 +571,139 @@ async function exportPerformanceXlsxWithChart(
   chartNode: HTMLElement
 ) {
   const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet("Performance");
+  wb.creator = "AthleTrack Admin System";
+  wb.created = new Date();
+  
+  const ws = wb.addWorksheet("Performance Metrics Report");
+  const today = new Date().toISOString().split("T")[0];
+  const reportPeriod = `Report Period: Current Season | Generated: ${today}`;
+  
+  let currentRow = addFormalHeader(ws, "WEEKLY PERFORMANCE METRICS REPORT", reportPeriod, sportDisplayName);
+  currentRow++;
 
-  ws.columns = [
-    { header: "Athlete Name",  key: "athlete",     width: 28 },
-    { header: "Email",         key: "email",       width: 36 },
-    { header: "PUP ID",        key: "pupid",       width: 18 },
-    { header: "Week",          key: "week",        width: 14 },
-    { header: "Agility",       key: "agility",     width: 12 },
-    { header: "Strength",      key: "strength",    width: 12 },
-    { header: "Power",         key: "power",       width: 12 },
-    { header: "Flexibility",   key: "flexibility", width: 12 },
-    { header: "Reaction Time", key: "reaction",    width: 16 },
-    { header: "Coordination",  key: "coordination",width: 14 },
+  // Calculate summary statistics
+  const uniqueAthletes = [...new Set(rows.map(r => r["PUP ID"]))].length;
+  const uniqueWeeks = [...new Set(rows.map(r => r["Week"]))].length;
+  const avgAgility = rows.length > 0 ? (rows.reduce((s, r) => s + r["Agility"], 0) / rows.length).toFixed(1) : "N/A";
+  const avgStrength = rows.length > 0 ? (rows.reduce((s, r) => s + r["Strength"], 0) / rows.length).toFixed(1) : "N/A";
+  const avgPower = rows.length > 0 ? (rows.reduce((s, r) => s + r["Power"], 0) / rows.length).toFixed(1) : "N/A";
+  const avgFlexibility = rows.length > 0 ? (rows.reduce((s, r) => s + r["Flexibility"], 0) / rows.length).toFixed(1) : "N/A";
+  const avgReaction = rows.length > 0 ? (rows.reduce((s, r) => s + r["Reaction Time"], 0) / rows.length).toFixed(1) : "N/A";
+  const avgCoordination = rows.length > 0 ? (rows.reduce((s, r) => s + r["Coordination"], 0) / rows.length).toFixed(1) : "N/A";
+
+  // ===== SUMMARY SECTION =====
+  ws.getCell(`A${currentRow}`).value = "I. SUMMARY STATISTICS";
+  ws.getCell(`A${currentRow}`).font = { bold: true, size: 12, color: { argb: "FF8B0000" } };
+  currentRow++;
+
+  const summaryData = [
+    ["Metric", "Value"],
+    ["Total Athletes", uniqueAthletes],
+    ["Weeks of Data", uniqueWeeks],
+    ["Total Records", rows.length],
+    ["", ""],
+    ["Avg. Agility", avgAgility],
+    ["Avg. Strength", avgStrength],
+    ["Avg. Power", avgPower],
+    ["Avg. Flexibility", avgFlexibility],
+    ["Avg. Reaction Time", avgReaction],
+    ["Avg. Coordination", avgCoordination],
   ];
 
-  rows.forEach(r =>
-    ws.addRow({
-      athlete: r["Athlete Name"],
-      email: r["Email"],
-      pupid: r["PUP ID"],
-      week: r["Week"],
-      agility: r["Agility"],
-      strength: r["Strength"],
-      power: r["Power"],
-      flexibility: r["Flexibility"],
-      reaction: r["Reaction Time"],
-      coordination: r["Coordination"],
-    })
-  );
+  summaryData.forEach((row, idx) => {
+    const rowNum = currentRow + idx;
+    ws.getCell(`B${rowNum}`).value = row[0];
+    ws.getCell(`C${rowNum}`).value = row[1];
+    
+    if (idx === 0) {
+      ["B", "C"].forEach(col => {
+        ws.getCell(`${col}${rowNum}`).font = { bold: true, color: { argb: "FFFFFFFF" } };
+        ws.getCell(`${col}${rowNum}`).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF8B0000" } };
+      });
+    }
+  });
+  currentRow += summaryData.length + 2;
+
+  // ===== DATA TABLE SECTION =====
+  ws.getCell(`A${currentRow}`).value = "II. DETAILED PERFORMANCE DATA";
+  ws.getCell(`A${currentRow}`).font = { bold: true, size: 12, color: { argb: "FF8B0000" } };
+  currentRow++;
+
+  // Table headers
+  const headers = ["#", "Athlete Name", "Email", "PUP ID", "Week", "Agility", "Strength", "Power", "Flexibility", "Reaction Time", "Coordination"];
+  headers.forEach((header, idx) => {
+    const col = String.fromCharCode(65 + idx); // A, B, C, ...
+    ws.getCell(`${col}${currentRow}`).value = header;
+    ws.getCell(`${col}${currentRow}`).font = { bold: true, color: { argb: "FFFFFFFF" } };
+    ws.getCell(`${col}${currentRow}`).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF8B0000" } };
+    ws.getCell(`${col}${currentRow}`).alignment = { horizontal: "center" };
+  });
+  currentRow++;
+
+  // Data rows
+  rows.forEach((r, idx) => {
+    ws.getCell(`A${currentRow}`).value = idx + 1;
+    ws.getCell(`B${currentRow}`).value = r["Athlete Name"];
+    ws.getCell(`C${currentRow}`).value = r["Email"];
+    ws.getCell(`D${currentRow}`).value = r["PUP ID"];
+    ws.getCell(`E${currentRow}`).value = r["Week"];
+    ws.getCell(`F${currentRow}`).value = r["Agility"];
+    ws.getCell(`G${currentRow}`).value = r["Strength"];
+    ws.getCell(`H${currentRow}`).value = r["Power"];
+    ws.getCell(`I${currentRow}`).value = r["Flexibility"];
+    ws.getCell(`J${currentRow}`).value = r["Reaction Time"];
+    ws.getCell(`K${currentRow}`).value = r["Coordination"];
+    
+    ["A", "E", "F", "G", "H", "I", "J", "K"].forEach(col => {
+      ws.getCell(`${col}${currentRow}`).alignment = { horizontal: "center" };
+    });
+    currentRow++;
+  });
+  currentRow += 2;
+
+  // ===== CHART SECTION =====
+  ws.getCell(`A${currentRow}`).value = "III. PERFORMANCE TREND VISUALIZATION";
+  ws.getCell(`A${currentRow}`).font = { bold: true, size: 12, color: { argb: "FF8B0000" } };
+  currentRow++;
 
   const dataUrl = await toPng(chartNode, { cacheBust: true, backgroundColor: "#FFFFFF" });
   const base64 = dataUrl.split(",")[1];
   const imgId = wb.addImage({ base64, extension: "png" });
 
-  const startRow = rows.length + 3;
   ws.addImage(imgId, {
-    tl: { col: 0, row: startRow },
+    tl: { col: 0, row: currentRow },
     ext: { width: 900, height: 420 },
     editAs: "oneCell",
   });
+  currentRow += 24;
+
+  // ===== FOOTER =====
+  ws.mergeCells(`A${currentRow}:K${currentRow}`);
+  ws.getCell(`A${currentRow}`).value = "— End of Report —";
+  ws.getCell(`A${currentRow}`).font = { italic: true, size: 10, color: { argb: "FF666666" } };
+  ws.getCell(`A${currentRow}`).alignment = { horizontal: "center" };
+  
+  currentRow++;
+  ws.mergeCells(`A${currentRow}:K${currentRow}`);
+  ws.getCell(`A${currentRow}`).value = "This report was automatically generated by AthleTrack Admin System. For questions, contact the Sports Development Program Office.";
+  ws.getCell(`A${currentRow}`).font = { size: 9, color: { argb: "FF999999" } };
+  ws.getCell(`A${currentRow}`).alignment = { horizontal: "center", wrapText: true };
+
+  // Set column widths
+  ws.getColumn(1).width = 5;
+  ws.getColumn(2).width = 26;
+  ws.getColumn(3).width = 30;
+  ws.getColumn(4).width = 14;
+  ws.getColumn(5).width = 12;
+  ws.getColumn(6).width = 10;
+  ws.getColumn(7).width = 10;
+  ws.getColumn(8).width = 10;
+  ws.getColumn(9).width = 12;
+  ws.getColumn(10).width = 14;
+  ws.getColumn(11).width = 14;
 
   const buf = await wb.xlsx.writeBuffer();
-  saveAs(new Blob([buf]), `${sportSlug}-performance-with-chart.xlsx`);
+  saveAs(new Blob([buf]), `AthleTrack_Performance_${sportSlug}_${today}.xlsx`);
 }
 
 export default function SportDetail() {
@@ -931,7 +1255,7 @@ export default function SportDetail() {
                   onClick={async () => {
                     const node = prepostChartRef.current;
                     if (!node) return;
-                    await exportChartAsPdf(node, `${slugify(sportName)}-prepost-chart.pdf`);
+                    await exportChartAsPdf(node, `AthleTrack_PrePost_Chart_${slugify(sportName)}.pdf`, sportName, "PRE-TEST VS POST-TEST COMPARISON");
                   }}
                 >
                   Export PDF
@@ -955,6 +1279,7 @@ export default function SportDetail() {
                     if (!node) return;
                     await exportPrepostXlsxWithChart(
                       slugify(sportName),
+                      sportName,
                       prepostExportRows,
                       node
                     );
@@ -1087,7 +1412,7 @@ export default function SportDetail() {
                   onClick={async () => {
                     const node = performanceChartRef.current;
                     if (!node) return;
-                    await exportChartAsPdf(node, `${slugify(sportName)}-performance-chart.pdf`);
+                    await exportChartAsPdf(node, `AthleTrack_Performance_Chart_${slugify(sportName)}.pdf`, sportName, "WEEKLY PERFORMANCE METRICS");
                   }}
                 >
                   Export PDF
@@ -1111,6 +1436,7 @@ export default function SportDetail() {
                     if (!node) return;
                     await exportPerformanceXlsxWithChart(
                       slugify(sportName),
+                      sportName,
                       performanceExportRows,
                       node
                     );

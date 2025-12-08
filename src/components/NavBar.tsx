@@ -3,9 +3,9 @@ import { Avatar, Dropdown, Modal } from "antd";
 import { LogoutOutlined, SettingOutlined, UserOutlined } from "@ant-design/icons";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { BRAND } from "@/brand";
-import { supabase } from "@/core/supabase";
+import { supabase, markSignOutInitiated } from "@/core/supabase";
 import { bulkSignedByUserIds } from "@/services/avatars";
-import { clearCachedAuth } from "@/components/ProtectedRoute";
+import { clearCachedAuth, clearEverLogged } from "@/components/ProtectedRoute";
 import { SyncBadge, useReconnectionToast } from "@/components/OfflineIndicator";
 
 export default function NavBar() {
@@ -55,8 +55,11 @@ export default function NavBar() {
   const handleOk = async () => {
     setIsModalVisible(false);
     try {
-      // Clear offline auth cache
+      // Clear offline auth cache and ever-logged flag
       clearCachedAuth();
+      clearEverLogged();
+      // Mark as user-initiated sign out (so we don't show unexpected logout message)
+      markSignOutInitiated();
       // Sign out from Supabase
       await supabase.auth.signOut();
     } catch (err) {

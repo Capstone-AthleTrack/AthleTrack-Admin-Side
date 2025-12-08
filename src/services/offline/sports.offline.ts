@@ -34,7 +34,7 @@ export async function listSportsOffline(): Promise<{
     {
       key: CacheKeys.sports.list(),
       ttl: SPORTS_LIST_TTL,
-      strategy: 'network-first',
+      strategy: 'stale-while-revalidate', // Show cached immediately, refresh in background
     }
   );
 }
@@ -57,7 +57,7 @@ export async function loadSportBundleOffline(slug: string): Promise<{
     {
       key: CacheKeys.sports.bundle(slug),
       ttl: SPORT_BUNDLE_TTL,
-      strategy: 'network-first',
+      strategy: 'stale-while-revalidate', // Show cached immediately, refresh in background
     }
   );
 }
@@ -79,7 +79,7 @@ export async function loadAthleteBundleOffline(athleteId: string): Promise<{
     {
       key: CacheKeys.athlete.bundle(athleteId),
       ttl: ATHLETE_BUNDLE_TTL,
-      strategy: 'network-first',
+      strategy: 'stale-while-revalidate', // Show cached immediately, refresh in background
     }
   );
 }

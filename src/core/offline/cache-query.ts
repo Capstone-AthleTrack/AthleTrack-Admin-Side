@@ -6,6 +6,33 @@ import { getNetworkStatus } from './network';
 
 export type CacheStrategy = 'network-first' | 'cache-first' | 'stale-while-revalidate';
 
+// ---- Cache Update Events ----
+// Allows components to subscribe to cache updates for real-time UI refresh
+type CacheUpdateListener = (key: string, data: unknown) => void;
+const cacheUpdateListeners = new Set<CacheUpdateListener>();
+
+/**
+ * Subscribe to cache updates (useful for stale-while-revalidate background refreshes)
+ * @returns Unsubscribe function
+ */
+export function subscribeToCacheUpdates(listener: CacheUpdateListener): () => void {
+  cacheUpdateListeners.add(listener);
+  return () => cacheUpdateListeners.delete(listener);
+}
+
+/**
+ * Emit a cache update event
+ */
+function emitCacheUpdate(key: string, data: unknown): void {
+  cacheUpdateListeners.forEach((listener) => {
+    try {
+      listener(key, data);
+    } catch (error) {
+      console.warn('[cache] Error in cache update listener:', error);
+    }
+  });
+}
+
 export interface CacheQueryOptions {
   /** Cache key for this query */
   key: string;
@@ -102,10 +129,15 @@ export async function cachedQuery<T>(
     
     if (cached && !forceRefresh) {
       // Return cached data immediately
-      // Revalidate in background if online
+      // Revalidate in background if online and emit update event
       if (isOnline) {
         fetcher()
-          .then((data) => cacheSet(key, data, ttl))
+          .then(async (data) => {
+            await cacheSet(key, data, ttl);
+            // Emit cache update event so subscribers (components) can refresh
+            emitCacheUpdate(key, data);
+            console.log(`[cache] Background refresh complete for: ${key}`);
+          })
           .catch((error) => console.warn(`[cache] Background refresh failed for: ${key}`, error));
       }
       return { data: cached.data, fromCache: true, isStale: cached.isStale };
@@ -168,6 +200,7 @@ export const CacheKeys = {
     requests: () => 'users:requests',
   },
 } as const;
+
 
 
 

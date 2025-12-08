@@ -90,6 +90,123 @@ if (import.meta.env.DEV) {
   });
 }
 
+// ---- Session Keeper: Proactive session refresh ----
+// Keeps the session alive by refreshing before expiry
+let sessionKeeperInterval: ReturnType<typeof setInterval> | null = null;
+let lastRefreshAttempt = 0;
+
+/**
+ * Start the session keeper - refreshes session periodically to prevent expiry
+ * Supabase tokens expire in 1 hour by default, we refresh every 45 minutes
+ */
+export function startSessionKeeper(): void {
+  if (sessionKeeperInterval) return; // Already running
+
+  const REFRESH_INTERVAL = 45 * 60 * 1000; // 45 minutes
+  const MIN_REFRESH_GAP = 5 * 60 * 1000;   // Don't refresh more than once per 5 minutes
+
+  const refreshSession = async () => {
+    const now = Date.now();
+    if (now - lastRefreshAttempt < MIN_REFRESH_GAP) {
+      console.log('[session] Skipping refresh - too soon since last attempt');
+      return;
+    }
+
+    try {
+      lastRefreshAttempt = now;
+      const { data: { session } } = await _supabase.auth.getSession();
+      
+      if (!session) {
+        console.log('[session] No active session to refresh');
+        return;
+      }
+
+      // Check if token expires in less than 15 minutes
+      const expiresAt = session.expires_at ? session.expires_at * 1000 : 0;
+      const timeUntilExpiry = expiresAt - now;
+      
+      if (timeUntilExpiry < 15 * 60 * 1000) {
+        console.log('[session] Token expiring soon, refreshing...');
+        const { error: refreshError } = await _supabase.auth.refreshSession();
+        if (refreshError) {
+          console.warn('[session] Refresh failed:', refreshError.message);
+        } else {
+          console.log('[session] Token refreshed successfully');
+        }
+      } else {
+        console.log(`[session] Token still valid for ${Math.round(timeUntilExpiry / 60000)} minutes`);
+      }
+    } catch (err) {
+      console.warn('[session] Error during refresh check:', err);
+    }
+  };
+
+  // Initial check
+  setTimeout(refreshSession, 5000); // Wait 5s for app to stabilize
+
+  // Periodic refresh
+  sessionKeeperInterval = setInterval(refreshSession, REFRESH_INTERVAL);
+
+  // Refresh when tab becomes visible (user returns after being away)
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === 'visible') {
+      console.log('[session] Tab visible - checking session...');
+      refreshSession();
+    }
+  };
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+
+  // Refresh on network reconnection
+  const handleOnline = () => {
+    console.log('[session] Network online - checking session...');
+    setTimeout(refreshSession, 1000);
+  };
+  window.addEventListener('online', handleOnline);
+
+  console.log('[session] Session keeper started');
+}
+
+/**
+ * Stop the session keeper
+ */
+export function stopSessionKeeper(): void {
+  if (sessionKeeperInterval) {
+    clearInterval(sessionKeeperInterval);
+    sessionKeeperInterval = null;
+    console.log('[session] Session keeper stopped');
+  }
+}
+
+// Auto-start session keeper when module loads
+if (typeof window !== 'undefined') {
+  startSessionKeeper();
+  
+  // Listen for auth errors and handle gracefully
+  _supabase.auth.onAuthStateChange((event, session) => {
+    if (event === 'TOKEN_REFRESHED') {
+      console.log('[session] Token refreshed automatically');
+      lastRefreshAttempt = Date.now();
+    }
+    
+    if (event === 'SIGNED_OUT' && !session) {
+      // Check if this was an unexpected sign out (not user-initiated)
+      const wasUserInitiated = sessionStorage.getItem('athletrack:signout-initiated');
+      if (!wasUserInitiated) {
+        console.log('[session] Session ended unexpectedly - may have been revoked');
+        // Could show a toast or redirect to sign-in here
+      }
+      sessionStorage.removeItem('athletrack:signout-initiated');
+    }
+  });
+}
+
+/**
+ * Mark sign-out as user-initiated (call before supabase.auth.signOut)
+ */
+export function markSignOutInitiated(): void {
+  sessionStorage.setItem('athletrack:signout-initiated', 'true');
+}
+
 // 🔹 Named + default export (some files might use either)
 export const supabase = _supabase;
 

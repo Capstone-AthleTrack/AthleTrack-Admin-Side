@@ -20,7 +20,7 @@ export async function getMyProfileOffline(): Promise<{
     {
       key: CacheKeys.profile.me(),
       ttl: PROFILE_TTL,
-      strategy: 'network-first',
+      strategy: 'stale-while-revalidate', // Show cached immediately, refresh in background
     }
   );
 }
@@ -92,6 +92,7 @@ export async function updateMyProfileOffline(patch: {
 export async function clearProfileCache(): Promise<void> {
   await cacheDelete(CacheKeys.profile.me());
 }
+
 
 
 

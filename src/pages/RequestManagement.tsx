@@ -26,6 +26,23 @@ type ReqStatus = "Pending" | "Accepted" | "Denied";
 type ReqKind = "Users" | "AthleteRequests";
 type FinalRole = "athlete" | "coach" | "admin";
 
+// Normalize status for display (handles legacy "approved"/"denied" from database)
+const normalizeStatus = (s: string): { display: string; isPending: boolean; isAccepted: boolean } => {
+  const lower = s.toLowerCase();
+  return {
+    display: lower === "approved" ? "Accepted" : lower === "denied" ? "Denied" : s,
+    isPending: lower === "pending",
+    isAccepted: lower === "accepted" || lower === "approved",
+  };
+};
+
+const getStatusColor = (s: string): "processing" | "success" | "error" => {
+  const { isPending, isAccepted } = normalizeStatus(s);
+  if (isPending) return "processing";
+  if (isAccepted) return "success";
+  return "error";
+};
+
 // DbReqRow type moved to requests.offline.ts
 
 type RequestItem = {
@@ -314,23 +331,22 @@ export default function RequestManagement() {
                     <div className="text-xs text-gray-500 truncate">
                       {item.email ?? "—"} · {item.deviceName ?? "—"}
                     </div>
+                    {item.extra?.pupId && (
+                      <div className="text-xs text-gray-400 truncate">
+                        PUP ID: {item.extra.pupId}
+                      </div>
+                    )}
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2 ml-2 shrink-0 items-center">
-                  <Tag
-                    bordered={false}
-                    className="!rounded-full !m-0"
-                    color={
-                      item.status === "Pending"
-                        ? "processing"
-                        : item.status === "Accepted"
-                        ? "success"
-                        : "error"
-                    }
-                  >
-                    {item.status}
-                  </Tag>
+                    <Tag
+                      bordered={false}
+                      className="!rounded-full !m-0"
+                      color={getStatusColor(item.status)}
+                    >
+                      {normalizeStatus(item.status).display}
+                    </Tag>
                   <RightOutlined className="text-gray-400" />
                 </div>
               </button>
@@ -357,11 +373,9 @@ export default function RequestManagement() {
                     <div className="min-w-[220px]">
                       <div className="text-lg font-semibold leading-tight">{selected.name}</div>
                       <div className="text-sm text-gray-500 space-x-2">
-                        {selected.extra?.pupId && (
-                          <span>
-                            PUP ID: <b className="text-gray-700">{selected.extra.pupId}</b>
-                          </span>
-                        )}
+                        <span>
+                          PUP ID: <b className="text-gray-700">{selected.extra?.pupId || "None"}</b>
+                        </span>
                         {selected.extra?.sport && (
                           <span>
                             Sport: <b className="text-gray-700">{selected.extra.sport}</b>
@@ -373,33 +387,25 @@ export default function RequestManagement() {
                       <Tag
                         bordered={false}
                         className="!rounded-full !px-3 !py-1"
-                        color={
-                          selected.status === "Pending"
-                            ? "processing"
-                            : selected.status === "Accepted"
-                            ? "success"
-                            : "error"
-                        }
+                        color={getStatusColor(selected.status)}
                       >
-                        {selected.status}
+                        {normalizeStatus(selected.status).display}
                       </Tag>
                     </div>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <Labeled value={selected.name} label="User Name" />
-                  <Labeled value={selected.deviceName ?? "—"} label="Device Name" />
                   <Labeled value={selected.email ?? "—"} label="Email" />
                   <Labeled
                     value={dayjs(selected.issuedAt).format("MMM D, YYYY • h:mm A")}
                     label="Issued Date & Time"
                   />
-                  <Labeled value={selected.status} label="Status" />
-                  <Labeled value={selected.extra?.phone ?? "—"} label="Phone Number" />
+                  <Labeled value={normalizeStatus(selected.status).display} label="Status" />
 
                   {/* Show only if not pending */}
-                  {selected.status !== "Pending" && (
+                  {!normalizeStatus(selected.status).isPending && (
                     <>
                       <Labeled
                         value={selected.extra?.decidedByName || selected.extra?.decidedById || "—"}
@@ -428,13 +434,13 @@ export default function RequestManagement() {
                       placeholder="Enter reason (required to accept/deny)"
                       className="!resize-none !border-0 !shadow-none !bg-white"
                       style={{ padding: 0 }}
-                      disabled={selected.status !== "Pending"}
+                      disabled={!normalizeStatus(selected.status).isPending}
                     />
                   </div>
                 </div>
 
                 {/* Buttons only when Pending */}
-                {selected.status === "Pending" && (
+                {normalizeStatus(selected.status).isPending && (
                   <div className="flex flex-col sm:flex-row gap-3 justify-end">
                     <Popconfirm
                       title="Deny this request?"

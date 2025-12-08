@@ -34,6 +34,7 @@ type ProfileCompat = {
   role: DBRole;
   status?: DBStatus;
   is_active?: boolean | null; // legacy boolean column
+  is_admin_panel_allowed?: boolean | null; // allows non-admin users (e.g., coaches) to access admin panel
 };
 
 // Normalize mixed/legacy status values into the new set
@@ -138,15 +139,19 @@ export default function SignIn() {
 
       // 4) Check profile role/status (supports both `status` and legacy `is_active`)
       const role: DBRole = prof?.role ?? "user";
+      const isAdminPanelAllowed = !!prof?.is_admin_panel_allowed;
       const statusNormalized = normalizeStatus(
         prof?.status ?? (prof?.is_active ? "accepted" : "pending")
       );
 
       // Debug info (console only, no UI changes)
-      console.info("[SignIn] gate check:", { role, status: statusNormalized });
+      console.info("[SignIn] gate check:", { role, isAdminPanelAllowed, status: statusNormalized });
 
-      // Enforce web = admin-only. If not admin, sign out and block here.
-      if (role !== "admin") {
+      // Enforce web = admin-only OR users with is_admin_panel_allowed flag.
+      // This allows "Admin Coaches" to access the web panel.
+      const canAccessAdminPanel = role === "admin" || isAdminPanelAllowed;
+      
+      if (!canAccessAdminPanel) {
         try {
           await supabase.auth.signOut();
         } catch {
@@ -156,14 +161,17 @@ export default function SignIn() {
         return;
       }
 
-      // If admin but not yet approved, keep prior approval flow.
+      // If user can access admin panel but not yet approved, keep prior approval flow.
       if (statusNormalized !== "accepted") {
-        try {
-          await submitAdminRequest();
-        } catch {
-          /* no-op */
+        // Only submit admin request if they're an admin (not admin coaches)
+        if (role === "admin") {
+          try {
+            await submitAdminRequest();
+          } catch {
+            /* no-op */
+          }
         }
-        message.info("Your admin account is pending approval.");
+        message.info("Your account is pending approval.");
         // Stay on sign-in page; do not navigate to dashboard.
         return;
       }
@@ -181,7 +189,7 @@ export default function SignIn() {
         /* ignore */
       }
 
-      // 5) Admin & accepted → proceed
+      // 5) Admin (or Admin Coach) & accepted → proceed
       // Record login for telemetry
       recordLogin("password");
       // Prefetch all data for offline use (runs in background with progressive)

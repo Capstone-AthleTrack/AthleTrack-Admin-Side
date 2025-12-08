@@ -1,21 +1,22 @@
-import { useEffect } from "react";
+import { useEffect, lazy, Suspense } from "react";
 import { recordSessionStart } from "@/utils/telemetry";
 import { Routes, Route, Navigate } from "react-router-dom";
-import { message } from "antd";
+import { message, Spin } from "antd";
 
-/* ── Public pages ── */
-import SignIn from "./pages/SignIn";
-import SignUp from "./pages/SignUp";
-import ResetPassword from "./pages/ResetPassword";
+/* ── Lazy-loaded Public pages (code splitting) ── */
+const SignIn = lazy(() => import("./pages/SignIn"));
+const SignUp = lazy(() => import("./pages/SignUp"));
+const ResetPassword = lazy(() => import("./pages/ResetPassword"));
+const UpdatePassword = lazy(() => import("./pages/UpdatePassword"));
 
-/* ── Staff (protected) pages ── */
-import Dashboard from "./pages/Dashboard";
-import Sports from "./components/Sports";
-import SportDetail from "./pages/SportsDetail";
-import AthleteDetail from "./pages/AthleteDetail";
-import UserManagement from "./pages/UserManagement";
-import RequestManagement from "./pages/RequestManagement";
-import Settings from "./pages/Settings";
+/* ── Lazy-loaded Staff (protected) pages (code splitting) ── */
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Sports = lazy(() => import("./components/Sports"));
+const SportDetail = lazy(() => import("./pages/SportsDetail"));
+const AthleteDetail = lazy(() => import("./pages/AthleteDetail"));
+const UserManagement = lazy(() => import("./pages/UserManagement"));
+const RequestManagement = lazy(() => import("./pages/RequestManagement"));
+const Settings = lazy(() => import("./pages/Settings"));
 
 /* ── Single source of truth for gating ── */
 import ProtectedRoute from "@/components/ProtectedRoute";
@@ -23,6 +24,13 @@ import ProtectedRoute from "@/components/ProtectedRoute";
 /* ── Offline components ── */
 import { OfflineBanner, offlineIndicatorStyles } from "@/components/OfflineIndicator";
 import { onSyncNotification, type SyncNotification } from "@/core/offline";
+
+/* ── Loading fallback for lazy-loaded components ── */
+const PageLoader = () => (
+  <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-white to-[#fff8cc]">
+    <Spin size="large" tip="Loading..." />
+  </div>
+);
 
 /**
  * IMPORTANT:
@@ -87,7 +95,9 @@ export default function App() {
       {/* Inject CSS for offline indicator animations */}
       <style>{offlineIndicatorStyles}</style>
 
-      <Routes>
+      {/* Suspense wrapper for lazy-loaded routes */}
+      <Suspense fallback={<PageLoader />}>
+        <Routes>
       {/* Default → sign-in */}
       <Route path="/" element={<Navigate to="/sign-in" replace />} />
 
@@ -95,6 +105,7 @@ export default function App() {
       <Route path="/sign-in" element={<SignIn />} />
       <Route path="/sign-up" element={<SignUp />} />
       <Route path="/reset-password" element={<ResetPassword />} />
+      <Route path="/update-password" element={<UpdatePassword />} />
 
       {/* Protected staff routes (wrapped with ProtectedRoute) */}
       <Route
@@ -156,7 +167,8 @@ export default function App() {
 
       {/* Fallback → sign-in */}
       <Route path="*" element={<Navigate to="/sign-in" replace />} />
-    </Routes>
+        </Routes>
+      </Suspense>
     </>
   );
 }

@@ -1,9 +1,10 @@
-import { Navigate } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { User } from '@supabase/supabase-js';
 
 /* Use the same default import style as the rest of the app (e.g., SignIn.tsx) */
 import supabase from '@/core/supabase';
+import { useNetworkStatus } from '@/hooks/useNetworkStatus';
 
 type ProfileGateRow = {
   id?: string | null;
@@ -12,6 +13,8 @@ type ProfileGateRow = {
   status: string | null;
   /** legacy boolean used by older builds */
   is_active?: boolean | null;
+  /** Allows non-admin users (e.g., coaches) to access the admin panel */
+  is_admin_panel_allowed?: boolean | null;
 } | null;
 
 /** Gmail-only helper (client-side UX guard; DB also enforces) */
@@ -20,6 +23,8 @@ const isGmail = (e?: string | null) =>
 
 // ---- Offline Auth Cache ----
 const AUTH_CACHE_KEY = 'athletrack:auth:profile';
+// Key to track if user has ever successfully authenticated
+const AUTH_EVER_LOGGED_KEY = 'athletrack:auth:ever-logged';
 
 interface CachedAuthProfile {
   userId: string;
@@ -27,6 +32,7 @@ interface CachedAuthProfile {
   role: string;
   status: string;
   isActive: boolean;
+  isAdminPanelAllowed: boolean;
   allowed: boolean;
   cachedAt: number;
 }
@@ -52,6 +58,34 @@ function setCachedAuth(profile: CachedAuthProfile): void {
 export function clearCachedAuth(): void {
   try {
     localStorage.removeItem(AUTH_CACHE_KEY);
+    // Don't clear AUTH_EVER_LOGGED_KEY - we need it for offline recovery
+  } catch {
+    // ignore
+  }
+}
+
+/** Mark that a user has successfully logged in at least once */
+function setEverLogged(): void {
+  try {
+    localStorage.setItem(AUTH_EVER_LOGGED_KEY, 'true');
+  } catch {
+    // ignore
+  }
+}
+
+/** Check if user has ever logged in (for offline session recovery) */
+function hasEverLogged(): boolean {
+  try {
+    return localStorage.getItem(AUTH_EVER_LOGGED_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+/** Clear the ever-logged flag (on explicit sign-out) */
+export function clearEverLogged(): void {
+  try {
+    localStorage.removeItem(AUTH_EVER_LOGGED_KEY);
   } catch {
     // ignore
   }
@@ -59,6 +93,8 @@ export function clearCachedAuth(): void {
 
 export default function ProtectedRoute({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
+  const { isOnline } = useNetworkStatus();
+  const location = useLocation();
 
   /** We use a two-step hydration to avoid redirect "bounces" right after sign-in */
   const [gotInitialSession, setGotInitialSession] = useState(false);
@@ -66,6 +102,9 @@ export default function ProtectedRoute({ children }: { children: ReactNode }) {
 
   const [checking, setChecking] = useState(true);
   const [allowed, setAllowed] = useState(false);
+  
+  /** Track if we're using offline cached auth */
+  const [usingOfflineAuth, setUsingOfflineAuth] = useState(false);
 
   /** Small grace window after hydration to let the session fully settle */
   const GRACE_MS = 700;
@@ -124,10 +163,38 @@ export default function ProtectedRoute({ children }: { children: ReactNode }) {
       (async () => {
         if (!active) return;
 
-        // No session -> deny
+        // Helper to use cached auth when offline (works even without user)
+        const useCachedAuthIfAvailable = (requiredUserId?: string): boolean => {
+          const cached = getCachedAuth();
+          // If we have cached auth and either no specific user required OR it matches
+          if (cached && (!requiredUserId || cached.userId === requiredUserId)) {
+            console.info('[ProtectedRoute] using cached auth (offline)', cached);
+            setAllowed(cached.allowed);
+            setUsingOfflineAuth(true);
+            setChecking(false);
+            return true;
+          }
+          return false;
+        };
+
+        // No session -> check if offline with cached auth before denying
         if (!user) {
+          // If offline and we have cached auth from a previous session, use it
+          if (!isOnline && hasEverLogged()) {
+            const cached = getCachedAuth();
+            if (cached && cached.allowed) {
+              console.info('[ProtectedRoute] offline mode: using cached auth (no active session)', cached);
+              setAllowed(true);
+              setUsingOfflineAuth(true);
+              setChecking(false);
+              return;
+            }
+          }
+          
+          // No session and either online or no cached auth
           clearCachedAuth();
           setAllowed(false);
+          setUsingOfflineAuth(false);
           setChecking(false);
           return;
         }
@@ -136,34 +203,26 @@ export default function ProtectedRoute({ children }: { children: ReactNode }) {
         if (!isGmail(user.email ?? '')) {
           clearCachedAuth();
           setAllowed(false);
+          setUsingOfflineAuth(false);
           setChecking(false);
           console.info('[ProtectedRoute] blocked non-gmail session:', user.email);
           return;
         }
 
         const decide = (p: ProfileGateRow | null) => {
-          const isAdmin = (p?.role ?? 'user') === 'admin';
+          const role = p?.role ?? 'user';
+          const isAdmin = role === 'admin';
+          const isAdminPanelAllowed = !!p?.is_admin_panel_allowed;
           const okStatus = isAllowedStatus(p?.status) || !!p?.is_active; // accept legacy is_active=true
-          return isAdmin && okStatus;
-        };
-
-        // Helper to use cached auth when offline
-        const useCachedAuthIfAvailable = (): boolean => {
-          const cached = getCachedAuth();
-          if (cached && cached.userId === user.id) {
-            console.info('[ProtectedRoute] using cached auth (offline)', cached);
-            setAllowed(cached.allowed);
-            setChecking(false);
-            return true;
-          }
-          return false;
+          // Allow access if: admin with ok status OR has admin panel access with ok status
+          return (isAdmin || isAdminPanelAllowed) && okStatus;
         };
 
         // 1) Try by auth user id
         try {
           const { data: byId, error: errId } = await supabase
             .from('profiles')
-            .select('id,email,role,status,is_active')
+            .select('id,email,role,status,is_active,is_admin_panel_allowed')
             .eq('id', user.id)
             .maybeSingle<ProfileGateRow>();
 
@@ -178,16 +237,21 @@ export default function ProtectedRoute({ children }: { children: ReactNode }) {
               role: byId?.role ?? 'user',
               status: byId?.status ?? '',
               isActive: !!byId?.is_active,
+              isAdminPanelAllowed: !!byId?.is_admin_panel_allowed,
               allowed: ok,
               cachedAt: Date.now(),
             });
+            // Mark that user has successfully logged in (for offline recovery)
+            if (ok) setEverLogged();
             setAllowed(ok);
+            setUsingOfflineAuth(false);
             setChecking(false);
             console.info('[ProtectedRoute] decision (by id)', {
               uid: user.id,
               role: byId?.role,
               status: byId?.status,
               is_active: byId?.is_active,
+              is_admin_panel_allowed: byId?.is_admin_panel_allowed,
               ok,
             });
             return;
@@ -205,7 +269,7 @@ export default function ProtectedRoute({ children }: { children: ReactNode }) {
           if (email) {
             const { data: byEmail, error: errEmail } = await supabase
               .from('profiles')
-              .select('id,email,role,status,is_active')
+              .select('id,email,role,status,is_active,is_admin_panel_allowed')
               .eq('email', email) // citext equality is case-insensitive
               .maybeSingle<ProfileGateRow>();
 
@@ -220,16 +284,21 @@ export default function ProtectedRoute({ children }: { children: ReactNode }) {
                 role: byEmail?.role ?? 'user',
                 status: byEmail?.status ?? '',
                 isActive: !!byEmail?.is_active,
+                isAdminPanelAllowed: !!byEmail?.is_admin_panel_allowed,
                 allowed: ok,
                 cachedAt: Date.now(),
               });
+              // Mark that user has successfully logged in (for offline recovery)
+              if (ok) setEverLogged();
               setAllowed(ok);
+              setUsingOfflineAuth(false);
               setChecking(false);
               console.info('[ProtectedRoute] decision (by email)', {
                 email,
                 role: byEmail?.role,
                 status: byEmail?.status,
                 is_active: byEmail?.is_active,
+                is_admin_panel_allowed: byEmail?.is_admin_panel_allowed,
                 ok,
               });
               return;
@@ -243,10 +312,20 @@ export default function ProtectedRoute({ children }: { children: ReactNode }) {
         }
 
         // 3) Last resort: try cached auth before denying
-        if (useCachedAuthIfAvailable()) return;
+        if (useCachedAuthIfAvailable(user.id)) return;
 
-        // No readable profile -> deny
+        // No readable profile -> deny (but if offline, be more lenient)
+        if (!isOnline && hasEverLogged()) {
+          // Offline and user has logged in before - allow access to avoid disruption
+          console.info('[ProtectedRoute] offline mode: allowing access (no profile fetch, but has logged before)');
+          setAllowed(true);
+          setUsingOfflineAuth(true);
+          setChecking(false);
+          return;
+        }
+        
         setAllowed(false);
+        setUsingOfflineAuth(false);
         setChecking(false);
         console.info('[ProtectedRoute] decision: no profile found / RLS blocked');
       })();
@@ -259,12 +338,36 @@ export default function ProtectedRoute({ children }: { children: ReactNode }) {
         graceTimer.current = null;
       }
     };
-  }, [gotInitialSession, gotAuthEvent, user]);
+  }, [gotInitialSession, gotAuthEvent, user, isOnline]);
 
   // While waiting for hydration or the grace window, render a tiny loader.
   const authReady = gotInitialSession || gotAuthEvent;
   if (!authReady || checking) return <div className="p-6">Loading…</div>;
-  if (!user) return <Navigate to="/sign-in" replace />;
-  if (!allowed) return <Navigate to="/sign-in" replace state={{ noAccess: true }} />;
+  
+  // If using offline auth, show the content (with optional indicator)
+  if (usingOfflineAuth && allowed) {
+    return <>{children}</>;
+  }
+  
+  // If offline and we had a previous session, don't redirect - show offline message or cached content
+  if (!isOnline && hasEverLogged()) {
+    const cached = getCachedAuth();
+    if (cached?.allowed) {
+      console.info('[ProtectedRoute] rendering offline with cached auth');
+      return <>{children}</>;
+    }
+  }
+  
+  // No user and online (or never logged in) -> redirect to sign-in
+  if (!user) {
+    // Preserve current path for redirect after login
+    return <Navigate to="/sign-in" replace state={{ from: location.pathname }} />;
+  }
+  
+  // User exists but not allowed
+  if (!allowed) {
+    return <Navigate to="/sign-in" replace state={{ noAccess: true }} />;
+  }
+  
   return <>{children}</>;
 }

@@ -56,7 +56,7 @@ export async function fetchLoginFrequencyOffline(
     {
       key: CacheKeys.metrics.loginFrequency(ymd(start), ymd(end)),
       ttl: LOGIN_FREQUENCY_TTL,
-      strategy: 'network-first',
+      strategy: 'stale-while-revalidate', // Show cached immediately, refresh in background
     }
   );
 }
@@ -96,6 +96,7 @@ export async function logLoginOffline(): Promise<void> {
   // Queue for later sync
   await queueAdd('logLogin', {});
 }
+
 
 
 

@@ -21,6 +21,7 @@ export type ProfileRowLike = {
   team?: TeamGender | null; // may be unused in some UIs
   status: DBStatus;
   created_at: string | null;
+  is_admin_panel_allowed?: boolean; // Allows coaches to access admin panel
 };
 
 // Row shape returned by RPC admin_list_users
@@ -35,6 +36,7 @@ type RpcAdminListUsersRow = {
   team: TeamGender;
   status: Exclude<DBStatus, null>;
   created_at: string | null;
+  is_admin_panel_allowed?: boolean;
 };
 
 type EditableRole = 'admin' | 'coach' | 'athlete';
@@ -113,6 +115,7 @@ export async function listUsers(params?: {
     team: r.team ?? null,
     status: r.status ?? null,
     created_at: r.created_at ?? null,
+    is_admin_panel_allowed: r.is_admin_panel_allowed ?? false,
   }));
 
   return rows;
@@ -141,4 +144,35 @@ export async function updateUserEditableFields(args: {
     _team: team,
   });
   if (error) throw error;
+}
+
+/**
+ * Toggle admin panel access for a user (typically used for coaches)
+ * When enabled, allows the user to access the admin web panel
+ */
+export async function setAdminPanelAccess(userId: string, allowed: boolean): Promise<void> {
+  const { error } = await supabase
+    .from('profiles')
+    .update({ is_admin_panel_allowed: allowed })
+    .eq('id', userId);
+  
+  if (error) throw error;
+}
+
+/**
+ * Check if a user can access the admin panel
+ * Returns true for admins OR users with is_admin_panel_allowed = true
+ */
+export function canAccessAdminPanel(role: DBRole, isAdminPanelAllowed?: boolean): boolean {
+  return role === 'admin' || isAdminPanelAllowed === true;
+}
+
+/**
+ * Get the display label for a user's admin access type
+ */
+export function getAdminTypeLabel(role: DBRole, isAdminPanelAllowed?: boolean): string {
+  if (role === 'admin') return 'Full Admin';
+  if (role === 'coach' && isAdminPanelAllowed) return 'Admin Coach';
+  if (isAdminPanelAllowed) return 'Has Admin Access';
+  return 'No Admin Access';
 }
